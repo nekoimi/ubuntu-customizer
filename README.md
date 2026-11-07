@@ -40,6 +40,7 @@ bash build.sh build
 - 预装 Docker Engine、CLI、containerd、Buildx 与 Compose 插件，使用构建时国内 Docker APT 仓库可用的最新兼容稳定版本，并记录实际版本。
 - 预装 Tailscale，`tailscaled` 开机自启；镜像保持未认证状态，安装后由用户执行 `sudo tailscale up` 手动认证，后续重启沿用本机认证状态。
 - Ubuntu APT 与 Docker 的 APT 安装仓库均使用国内镜像源，并在安装后保留；不配置 Docker 镜像加速地址。
+- Alpine 发布信息、minirootfs 和 APK 软件包统一使用阿里云国内镜像 `https://mirrors.aliyun.com/alpine`。
 - 采用阿里云 Ubuntu / Docker APT 源、清华 pip / uv 源；SSH 使用 22 端口和 `ubuntu` 密码登录，网络使用 DHCP，主机名由安装器自动生成。
 - SSH 登录成功后直接进入命令行，不显示 MOTD、系统状态、Ubuntu Pro 广告、更新或重启提醒及上次登录信息。
 - 采用 2 GiB 交换文件，`ubuntu` 通过 sudo 管理 Docker；上海时区、默认英文环境并预留中文 locale，安装结束后手动重启。
