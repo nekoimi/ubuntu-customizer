@@ -20,6 +20,8 @@ bash build.sh build
 
 终端显示主要步骤的开始、完成和耗时；长时间运行时每 30 秒提示当前步骤仍在执行。详细下载、安装输出保存在终端提示的 `tools.log`，可在另一个终端用 `sudo tail -f <日志路径>` 查看。
 
+构建入口使用独立的挂载、PID、UTS 和 IPC 命名空间，隔离镜像内包脚本与宿主进程，`/run` 使用独立 tmpfs；下载网络仍与宿主共用。这是以 root 执行的构建流程，并不等同于虚拟机级隔离；建议使用专用构建机器或虚拟机。
+
 uv 从 GitHub API / Releases 下载，Tailscale 使用官方 `pkgs.tailscale.com` 源；这些站点访问较慢时，可在 `config/local.env` 配置 v2rayA 的 **HTTP 代理**（地址和端口按实际部署填写）：
 
 ```bash

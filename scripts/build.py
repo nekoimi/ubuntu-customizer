@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build in a private Linux mount namespace. No host block device is a target."""
+"""Build with private mount, PID, UTS and IPC namespaces using file-backed disks."""
 import argparse
 from contextlib import contextmanager
 import datetime as dt
@@ -30,6 +30,15 @@ else:
 REPO = Path(__file__).resolve().parents[1]
 GIB = 1024 ** 3
 PROGRESS_INTERVAL = 30
+
+
+def check_build_isolation():
+    for namespace in ("mnt", "pid", "uts", "ipc"):
+        original = os.environ.get("UBUNTU_CUSTOMIZER_HOST_" + namespace.upper())
+        if not original or os.readlink("/proc/self/ns/" + namespace) == original:
+            raise RuntimeError("Private " + namespace + " namespace required; use scripts/build.sh")
+    if os.getpid() != 1 or not Path("/proc/1").exists():
+        raise RuntimeError("Private PID namespace and matching procfs required; use scripts/build.sh")
 
 
 def digest(path):
@@ -217,8 +226,7 @@ class Build:
         import fcntl
         if sys.platform != "linux" or os.geteuid() != 0 or os.uname().machine != "x86_64":
             raise RuntimeError("Run build.sh as root on Linux x86_64")
-        if os.readlink("/proc/self/ns/mnt") == os.readlink("/proc/1/ns/mnt"):
-            raise RuntimeError("Private mount namespace required; use scripts/build.sh")
+        check_build_isolation()
         check_host(self.config)
         for path in (self.work_base, self.release_base):
             path.mkdir(parents=True, exist_ok=True)
@@ -233,7 +241,7 @@ class Build:
             (self.stage / name).unlink(missing_ok=True)
         self.note("Build ID: " + self.id)
         self.note("Detailed log: " + str(self.work / "tools.log"))
-        self.note("Preflight passed; private guest mounts; file-backed disks only")
+        self.note("Preflight passed; private mount/PID/UTS/IPC namespaces; file-backed disks only")
         self.checks["preflight"] = "passed"
 
     def ubuntu(self):
