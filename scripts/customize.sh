@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Runs INSIDE the mounted Ubuntu image. Public configuration comes from build.py.
 set -euo pipefail
+trap 'printf "Guest customization failed (shell line %s, exit code %s): %s\n" "$LINENO" "$?" "$BASH_COMMAND" >&2' ERR
 [[ ${UBUNTU_CUSTOMIZER_GUEST:-} == 1 && -f /tmp/customizer/build-root ]] || {
     echo 'Use scripts/build.sh; this script must run inside the build image.' >&2
     exit 1
@@ -25,6 +26,7 @@ EOF
 printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
 chmod 755 /usr/sbin/policy-rc.d
 echo 'iperf3 iperf3/start_daemon boolean false' | debconf-set-selections
+echo 'Installing Ubuntu base tools and development packages'
 apt-get update
 apt-get dist-upgrade -y --no-install-recommends
 mapfile -t packages < <(sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' /tmp/customizer/packages.txt)
@@ -32,6 +34,7 @@ apt-get install -y --no-install-recommends "${packages[@]}"
 apt-get purge -y snapd cloud-init || exit 1
 rm -rf /snap /var/snap /var/lib/snapd /var/cache/snapd /etc/cloud /var/lib/cloud
 
+echo 'Configuring Docker and Tailscale signed package repositories'
 curl --fail --silent --show-error --location "$DOCKER_MIRROR/gpg" -o /etc/apt/keyrings/docker.asc
 chmod 644 /etc/apt/keyrings/docker.asc
 cat > /etc/apt/sources.list.d/docker.sources <<EOF
@@ -54,6 +57,7 @@ Architectures: amd64
 Signed-By: /etc/apt/keyrings/tailscale.gpg
 EOF
 apt-get update
+echo 'Installing Docker and Tailscale packages'
 apt-get install -y --no-install-recommends \
   docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin tailscale
 install -d /etc/docker /etc/uv
@@ -72,6 +76,7 @@ default = true
 EOF
 install -m 0755 /tmp/customizer/uv /tmp/customizer/uvx /usr/local/bin/
 
+echo 'Configuring accounts, hostname, locale and networking'
 getent passwd ubuntu >/dev/null || useradd --uid 1000 --user-group --create-home --shell /bin/bash ubuntu
 [[ $(id -u ubuntu) == 1000 && $(id -g ubuntu) == 1000 ]]
 usermod -aG sudo ubuntu
@@ -123,6 +128,7 @@ APT::Periodic::Download-Upgradeable-Packages "0";
 APT::Periodic::Unattended-Upgrade "0";
 Unattended-Upgrade::Automatic-Reboot "false";
 EOF
+echo 'Configuring enabled services and automatic update policy'
 systemctl disable ssh.socket
 systemctl enable ssh docker containerd tailscaled systemd-networkd systemd-resolved systemd-timesyncd apt-daily.timer
 systemctl mask apt-daily-upgrade.timer apt-daily-upgrade.service
@@ -140,6 +146,7 @@ GRUB_CMDLINE_LINUX_DEFAULT=""
 GRUB_CMDLINE_LINUX=""
 GRUB_DISABLE_OS_PROBER=true
 EOF
+echo 'Creating swapfile and recording installed package versions'
 dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
 chmod 600 /swapfile
 mkswap /swapfile
@@ -148,3 +155,4 @@ dpkg-query -W -f='${Package}\t${Version}\n' | sort > /var/lib/ubuntu-customizer/
 apt-cache policy docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin tailscale \
   > /var/lib/ubuntu-customizer/package-origins.txt
 rm -f /usr/sbin/policy-rc.d
+echo 'Ubuntu guest customization completed'
