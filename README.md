@@ -8,15 +8,25 @@
 
 ```bash
 # Ubuntu 22.04 / 24.04 x86_64 构建服务器
-bash build.sh setup
 [ -f config/local.env ] || cp config/local.env.example config/local.env
 chmod 600 config/local.env
-nano config/local.env  # 填写约定的初始密码；已有配置可跳过编辑
+nano config/local.env  # 填写初始密码和可选的构建代理；已有配置可跳过编辑
+bash build.sh setup
 bash build.sh check
 bash build.sh build
 ```
 
 入口在需要时自动调用 sudo。构建编号默认自动生成，ISO 保存到 `/srv/ubuntu-customizer/releases/<build-id>/ubuntu-custom-server.iso`，终端会显示实际路径。`bash build.sh test` 可运行安全测试和静态检查，`bash build.sh --help` 查看用法。
+
+uv 从 GitHub API / Releases 下载，Tailscale 使用官方 `pkgs.tailscale.com` 源；这些站点访问较慢时，可在 `config/local.env` 配置 v2rayA 的 **HTTP 代理**（地址和端口按实际部署填写）：
+
+```bash
+HTTP_PROXY='http://192.168.1.10:20171'
+HTTPS_PROXY='http://192.168.1.10:20171'
+NO_PROXY='localhost,127.0.0.1,::1,.aliyun.com,.tsinghua.edu.cn'
+```
+
+代理对 `setup` 和 `build` 生效，覆盖宿主下载、debootstrap、镜像内 APT / curl 和 Alpine APK；不会写入交付系统。Ubuntu / Docker / Alpine 国内源按 `NO_PROXY` 直连。留空代理地址即可直连；具体规则见 [构建代理说明](docs/构建与运行.md#构建代理可选)。
 
 详细设计见 [Ubuntu Server 定制镜像与整盘安装方案](docs/Ubuntu-Server-定制镜像方案.md)。
 

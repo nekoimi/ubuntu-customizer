@@ -20,6 +20,7 @@ Examples:
   bash build.sh build --config /path/to/build.json
 
 Password: config/local.env or UBUNTU_INITIAL_PASSWORD environment variable.
+Build proxy: HTTP_PROXY / HTTPS_PROXY / NO_PROXY in config/local.env or environment.
 Default ISO: /srv/ubuntu-customizer/releases/<build-id>/ubuntu-custom-server.iso
 EOF
 }
@@ -28,10 +29,7 @@ as_root() {
         exec "$@"
     fi
     command -v sudo >/dev/null || { echo 'sudo is required, or run this command as root.' >&2; exit 1; }
-    if [[ -n ${UBUNTU_INITIAL_PASSWORD:-} ]]; then
-        exec sudo --preserve-env=UBUNTU_INITIAL_PASSWORD -- "$@"
-    fi
-    exec sudo -- "$@"
+    exec sudo --preserve-env=UBUNTU_INITIAL_PASSWORD,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy -- "$@"
 }
 command=${1:-build}
 if (($#)); then shift; fi

@@ -18,6 +18,13 @@ import tarfile
 import time
 import urllib.request
 
+if __package__:
+    from .build_env import configure_proxy, password_input, proxy_secrets
+else:
+    # Direct execution and importlib-based safety tests use different search paths.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from build_env import configure_proxy, password_input, proxy_secrets
+
 REPO = Path(__file__).resolve().parents[1]
 GIB = 1024 ** 3
 
@@ -28,24 +35,6 @@ def digest(path):
         for chunk in iter(lambda: stream.read(8 * 1024 ** 2), b""):
             value.update(chunk)
     return value.hexdigest()
-
-
-def password_input(env, path):
-    value = env.get("UBUNTU_INITIAL_PASSWORD", "")
-    if not value and path.exists():
-        for line in path.read_text().splitlines():
-            if not line.strip() or line.lstrip().startswith("#"):
-                continue
-            key, separator, raw = line.partition("=")
-            if key.strip() != "UBUNTU_INITIAL_PASSWORD" or not separator:
-                raise ValueError("local.env accepts only UBUNTU_INITIAL_PASSWORD")
-            words = shlex.split(raw, comments=True)
-            if len(words) != 1:
-                raise ValueError("Password must be one shell-quoted value")
-            value = words[0]
-    if not value or any(char in value for char in "\r\n\x00"):
-        raise ValueError("Provide a nonempty single-line initial password via Secret or local.env")
-    return value
 
 
 def download(url, destination, expected=None):
@@ -138,6 +127,7 @@ class Build:
         self.logs = []
         self.checks = {}
         self.details = {"build_id": self.id, "architecture": "amd64", "ubuntu": "24.04 LTS", "manual_acceptance": "pending"}
+        self.proxy_env = configure_proxy()
         self.secret = password_input(os.environ, REPO / "config/local.env")
         self.password_hash = sp.check_output(["openssl", "passwd", "-6", "-stdin"], input=self.secret.encode()).decode().strip()
         os.environ.pop("UBUNTU_INITIAL_PASSWORD", None)
@@ -183,7 +173,10 @@ class Build:
         command = ["chroot", root, "/usr/bin/env", "-i", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root", "LC_ALL=C.UTF-8", "UBUNTU_CUSTOMIZER_GUEST=1"]
         command += [key + "=" + value for key, value in (environment or {}).items()]
         command += ["/bin/bash", "-se"]
-        self.run(command, input=script.encode())
+        # stdin is never logged; proxy credentials must not appear in command arguments.
+        exports = "".join("export " + key + "=" + shlex.quote(value) + "\n"
+                          for key, value in self.proxy_env.items())
+        self.run(command, input=(exports + script).encode())
 
     def preflight(self):
         import fcntl
@@ -430,7 +423,11 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
         if raw_log.exists():
             log_dir = self.release / "logs"
             log_dir.mkdir(exist_ok=True)
-            text = raw_log.read_text(errors="replace").replace(self.secret, "<redacted>").replace(self.password_hash, "<redacted>")
+            text = raw_log.read_text(errors="replace")
+            secrets = {self.secret, self.password_hash} | proxy_secrets(getattr(self, "proxy_env", {}))
+            for secret in sorted(secrets, key=len, reverse=True):
+                if secret:
+                    text = text.replace(secret, "<redacted>")
             (log_dir / "tools.log").write_text(text)
         self.stage.mkdir(exist_ok=True)
         for name, source in {"build-report.json": public / "build-report.json", "build.log": public / "build.log",
