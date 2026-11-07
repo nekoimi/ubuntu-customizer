@@ -186,7 +186,7 @@ def select_disk(disks, timeout=30):
 
 def confirm(disk, prompt=input):
     print(f"\nALL DATA WILL BE LOST on {disk['path']} ({disk.get('model') or ''}; serial={disk.get('serial') or '-'}; {disk['size']} bytes).")
-    if prompt("Type ERASE to install. No timeout; any other answer cancels: ") != "ERASE":
+    if prompt("Type y + Enter to erase this disk and install. No timeout; any other answer cancels: ").lower() != "y":
         raise Refusal("Erasure not confirmed")
 
 

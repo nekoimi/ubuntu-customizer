@@ -62,10 +62,11 @@ class SelectionSafety(unittest.TestCase):
             command.assert_not_called()
 
     def test_only_exact_explicit_confirmation_is_accepted(self):
-        for answer in ("", "yes", "erase", "ERASE ", "1"):
+        for answer in ("", "n", "N", "yes", "ERASE", "y ", " y", "1"):
             with self.subTest(answer=answer), self.assertRaises(installer.Refusal):
                 installer.confirm(disk("/dev/sda"), lambda _: answer)
-        installer.confirm(disk("/dev/sda"), lambda _: "ERASE")
+        for answer in ("y", "Y"):
+            installer.confirm(disk("/dev/sda"), lambda _: answer)
 
     def test_revalidation_rejects_replaced_or_busy_disk(self):
         selected = {**disk("/dev/sda"), "identity": ("serial-old",)}
