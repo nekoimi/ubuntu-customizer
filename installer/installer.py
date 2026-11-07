@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Offline whole-disk installer. Discovery and confirmation precede every write."""
+import argparse
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import select
+import shutil
 import stat
 import subprocess as sp
 import sys
@@ -13,10 +15,21 @@ import time
 
 MEDIA = Path("/media/installer")
 PAYLOAD = MEDIA / "payload"
+# Includes tools used by finalize.sh outside the Ubuntu chroot, where missing
+# Alpine subpackages would otherwise be discovered only AFTER overwriting a disk.
+LIVE_TOOLS = ("bash", "zstd", "lsblk", "findmnt", "sgdisk", "parted", "partprobe",
+              "e2fsck", "resize2fs", "tune2fs", "fatlabel", "blkid", "mount", "umount",
+              "chroot", "awk", "od", "tr", "mkdir", "install", "dd", "chmod", "date", "sync")
 
 
 class Refusal(RuntimeError):
     pass
+
+
+def check_live_tools():
+    missing = [tool for tool in LIVE_TOOLS if not shutil.which(tool)]
+    if missing:
+        raise Refusal("Missing Alpine Live tools: " + ", ".join(missing) + "; rebuild the installer ISO. No target disk has been written.")
 
 
 def output(*args):
@@ -241,9 +254,13 @@ def write_image(fd, image, expected_bytes, expected_hash):
         raise Refusal("Disk readback SHA256 mismatch")
 
 
-def main():
+def main(*, check_tools_only=False):
     if os.geteuid() != 0:
         raise Refusal("Root required inside Alpine Live")
+    check_live_tools()
+    if check_tools_only:
+        print("Alpine Live installer tools checked; no disks accessed.")
+        return
     print("Ubuntu Server offline installer — complete disk replacement")
     manifest = json.loads((PAYLOAD / "manifest.json").read_text())
     validate_manifest(manifest)
@@ -276,8 +293,11 @@ def main():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check-tools", action="store_true", help="Check Live tool availability only; do not access disks")
+    args = parser.parse_args()
     try:
-        main()
+        main(check_tools_only=args.check_tools)
     except (Exception, KeyboardInterrupt) as error:
         print("\nINSTALLATION STOPPED: " + str(error), file=sys.stderr)
         print("No success is claimed. If writing started, the selected disk may be incomplete.", file=sys.stderr)

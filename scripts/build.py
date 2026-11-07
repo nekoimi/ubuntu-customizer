@@ -343,11 +343,16 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
         self.run(["tar", "-xzf", archive, "-C", root])
         (root / "etc/apk/repositories").write_text(f"{mirror}/{branch}/main\n{mirror}/{branch}/community\n")
         self.api_mounts(root)
-        self.run(["chroot", root, "apk", "add", "--no-cache", "alpine-base", "linux-firmware-none", "linux-lts", "busybox-static", "python3", "bash", "util-linux", "lsblk", "findmnt", "parted", "gptfdisk", "e2fsprogs", "e2fsprogs-extra", "dosfstools", "zstd", "coreutils", "kmod"], label="Installing Alpine Live packages (APK)")
+        # Alpine packages the scripted GPT tool separately from interactive gdisk.
+        self.run(["chroot", root, "apk", "add", "--no-cache", "alpine-base", "linux-firmware-none", "linux-lts", "busybox-static", "python3", "bash", "util-linux", "lsblk", "findmnt", "parted", "sgdisk", "e2fsprogs", "e2fsprogs-extra", "dosfstools", "zstd", "coreutils", "kmod"], label="Installing Alpine Live packages (APK)")
         library = root / "usr/local/lib/ubuntu-customizer"
         library.mkdir(parents=True)
         for name in ("installer.py", "finalize.sh"):
             shutil.copyfile(REPO / "installer" / name, library / name)
+        self.run(["chroot", root, "/usr/bin/env", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                  "python3", "/usr/local/lib/ubuntu-customizer/installer.py", "--check-tools"],
+                 label="Checking Alpine Live installer tools before ISO packaging")
+        self.checks["alpine_installer_tools"] = "passed"
         console = root / "usr/local/sbin/installer-console"
         console.parent.mkdir(parents=True, exist_ok=True)
         console.write_text("#!/bin/sh\nexport PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\npython3 /usr/local/lib/ubuntu-customizer/installer.py\necho 'Installer stopped. Manual recovery shell; reboot only after unmounting disks.'\nexec /bin/sh\n")

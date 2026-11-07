@@ -236,6 +236,31 @@ class ConfigurationSafety(unittest.TestCase):
 
 
 class WriteGateSafety(unittest.TestCase):
+    def test_missing_live_tool_refuses_before_media_selection_or_target_open(self):
+        with patch.object(installer.os, "geteuid", return_value=0, create=True), \
+                patch.object(installer.shutil, "which", side_effect=lambda tool: None if tool == "sgdisk" else "/usr/bin/" + tool), \
+                patch.object(installer, "discover") as discover, \
+                patch.object(installer, "confirm") as confirmation, \
+                patch.object(installer.os, "open") as open_target, \
+                patch.object(installer, "write_image") as write:
+            with self.assertRaisesRegex(installer.Refusal, "Missing Alpine Live tools: sgdisk"):
+                installer.main()
+            discover.assert_not_called()
+            confirmation.assert_not_called()
+            open_target.assert_not_called()
+            write.assert_not_called()
+
+    def test_build_time_tool_check_does_not_inspect_media_or_disks(self):
+        with patch.object(installer.os, "geteuid", return_value=0, create=True), \
+                patch.object(installer.shutil, "which", return_value="/usr/bin/tool"), \
+                patch.object(installer.Path, "read_text") as read_media, \
+                patch.object(installer, "discover") as discover, \
+                patch.object(installer.os, "open") as open_target:
+            installer.main(check_tools_only=True)
+            read_media.assert_not_called()
+            discover.assert_not_called()
+            open_target.assert_not_called()
+
     def test_rejected_confirmation_or_changed_disk_never_opens_target(self):
         manifest = {"format": 1, "architecture": "amd64", "sector_size": 512, "root_partition": 3,
                     "esp_partition": 2, "raw_bytes": 1024, "raw_sha256": "0" * 64,
@@ -249,6 +274,7 @@ class WriteGateSafety(unittest.TestCase):
                 (media / "UBUNTU_CUSTOMIZER_MEDIA").write_text("test\n")
                 with patch.object(installer, "MEDIA", media), patch.object(installer, "PAYLOAD", payload), \
                         patch.object(installer.os, "geteuid", return_value=0, create=True), \
+                        patch.object(installer, "check_live_tools"), \
                         patch.object(installer, "sha256_file", return_value="0" * 64), \
                         patch.object(installer.sp, "run"), patch.object(installer, "discover", return_value=[disk("/dev/sda")]), \
                         patch.object(installer, "select_disk", return_value=disk("/dev/sda")), \

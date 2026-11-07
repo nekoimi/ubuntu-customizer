@@ -4,7 +4,7 @@
 
 已实现 Ubuntu 母镜像构建、Alpine Live ISO 打包和整盘安装器，当前以 **Ubuntu 构建机器直接执行命令行** 为主要方式。GitHub workflow 暂缓接入，保留代码且仍只允许手动触发。
 
-不需要 GitHub Runner、Actions Secret 或 Docker。详细步骤见 [构建与运行](docs/构建与运行.md)。当前尚未在 Linux 机器上完成完整构建及启动验收。
+不需要 GitHub Runner、Actions Secret 或 Docker。详细步骤见 [构建与运行](docs/构建与运行.md)。用户已在 Linux 构建机生成 ISO，并在虚拟机中完成 Live 启动、镜像写入及回读；安装收尾修复仍需用新 ISO 验证，完整安装验收尚未完成。
 
 ```bash
 # Ubuntu 22.04 / 24.04 x86_64 构建服务器
