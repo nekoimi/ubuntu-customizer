@@ -24,10 +24,12 @@
 - 预装编译工具、发行版 Python、venv / pip / 开发头文件与 uv；pip 使用国内源。
 - 不预装 Node.js、Java、Go、Rust，以及数据库与 Web 服务。
 - 预装 Docker Engine、CLI、containerd、Buildx 与 Compose 插件，使用构建时国内 Docker APT 仓库可用的最新兼容稳定版本，并记录实际版本。
+- 预装 Tailscale，`tailscaled` 开机自启；镜像保持未认证状态，安装后由用户执行 `sudo tailscale up` 手动认证，后续重启沿用本机认证状态。
 - Ubuntu APT 与 Docker 的 APT 安装仓库均使用国内镜像源，并在安装后保留；不配置 Docker 镜像加速地址。
 - 采用阿里云 Ubuntu / Docker APT 源、清华 pip / uv 源；SSH 使用 22 端口和 `ubuntu` 密码登录，网络使用 DHCP，主机名由安装器自动生成。
+- SSH 登录成功后直接进入命令行，不显示 MOTD、系统状态、Ubuntu Pro 广告、更新或重启提醒及上次登录信息。
 - 采用 2 GiB 交换文件，`ubuntu` 通过 sudo 管理 Docker；上海时区、默认英文环境并预留中文 locale，安装结束后手动重启。
-- 保留系统更新检查和提示，关闭自动安装及自动重启，由用户手动维护补丁。
+- 保留系统后台更新检查，关闭 SSH 登录欢迎信息和更新提示，关闭自动安装及自动重启，由用户手动维护补丁。
 - 安装结束后的第一次启动即可使用，不依赖首次开机初始化脚本。
 - 镜像预设首个普通用户 `ubuntu`（UID/GID 均为 `1000`）与已经指定的初始密码，安装时不询问；进入系统后自行修改密码，不强制首次登录改密。初始密码保存在本地不入库的 `config/local.env`。
 - 沿用 Ubuntu Server 的 sudo 管理方式，root 保持锁定，不设置 root 密码，不开放 root 直接登录。
