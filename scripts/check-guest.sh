@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'printf "Guest validation failed (shell line %s, exit code %s): %s\n" "$LINENO" "$?" "$BASH_COMMAND" >&2' ERR
 [[ ${UBUNTU_CUSTOMIZER_GUEST:-} == 1 && -f /tmp/customizer/build-root ]] || exit 1
 [[ $(id -u ubuntu) == 1000 && $(id -g ubuntu) == 1000 ]]
 [[ $(getent passwd ubuntu | cut -d: -f6-7) == /home/ubuntu:/bin/bash ]]
@@ -30,23 +31,33 @@ python3 -m venv /tmp/check-venv
 rm -rf /tmp/check-venv
 runuser -u ubuntu -- uv venv --offline --python /usr/bin/python3 /tmp/check-uv-venv
 rm -rf /tmp/check-uv-venv
-systemctl is-enabled ssh docker containerd tailscaled apt-daily.timer >/dev/null
+echo 'Checking service enablement and automatic update policy'
+for unit in ssh docker containerd tailscaled apt-daily.timer; do
+    systemctl is-enabled "$unit" >/dev/null
+done
 [[ $(systemctl is-enabled apt-daily-upgrade.timer) == masked ]]
 if grep -q registry-mirrors /etc/docker/daemon.json; then exit 1; fi
 if grep -E '^[^#].*pam_motd\.so' /etc/pam.d/sshd; then exit 1; fi
 install -d /run/sshd
 ssh-keygen -A >/dev/null
+echo 'Checking SSH configuration'
 sshd -t
-sshd -T | grep -qx 'permitrootlogin no'
-sshd -T | grep -qx 'passwordauthentication yes'
-sshd -T | grep -qx 'printmotd no'
-sshd -T | grep -qx 'printlastlog no'
-sshd -T | grep -qx 'banner none'
-apt-config dump | grep -q 'APT::Periodic::Unattended-Upgrade "0"'
-apt-config dump | grep -q 'Unattended-Upgrade::Automatic-Reboot "false"'
+# grep -q can close a pipe early and make the producer fail with SIGPIPE under
+# pipefail. Capture complete output once, preserving errors from the producer.
+sshd_config=$(sshd -T)
+grep -qx 'permitrootlogin no' <<< "$sshd_config"
+grep -qx 'passwordauthentication yes' <<< "$sshd_config"
+grep -qx 'printmotd no' <<< "$sshd_config"
+grep -qx 'printlastlog no' <<< "$sshd_config"
+grep -qx 'banner none' <<< "$sshd_config"
+echo 'Checking APT configuration'
+apt_configuration=$(apt-config dump)
+grep -q 'APT::Periodic::Unattended-Upgrade "0"' <<< "$apt_configuration"
+grep -q 'Unattended-Upgrade::Automatic-Reboot "false"' <<< "$apt_configuration"
 grep -q '^Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg$' /etc/apt/sources.list.d/ubuntu.sources
 grep -q '^Signed-By: /etc/apt/keyrings/docker.asc$' /etc/apt/sources.list.d/docker.sources
 grep -q '^Signed-By: /etc/apt/keyrings/tailscale.gpg$' /etc/apt/sources.list.d/tailscale.sources
 [[ $(stat -c %s /swapfile) == 2147483648 && $(stat -c %a /swapfile) == 600 ]]
 kernels=(/boot/vmlinuz-*)
 [[ -s ${kernels[0]} ]]
+echo 'Ubuntu guest validation passed'

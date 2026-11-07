@@ -173,7 +173,11 @@ class Build:
             log.write(("\n$ " + shlex.join(str(value) for value in argv) + "\n").encode())
             log.flush()
             with self.progress(label or Path(str(argv[0])).name, announce=label is not None):
-                return sp.run([str(v) for v in argv], stdout=log, stderr=sp.STDOUT, check=True, **kwargs)
+                try:
+                    return sp.run([str(v) for v in argv], stdout=log, stderr=sp.STDOUT, check=True, **kwargs)
+                except sp.CalledProcessError as error:
+                    self.note(f"Command failed: {label or Path(str(argv[0])).name}; exit code {error.returncode}")
+                    raise
 
     def output(self, argv):
         return sp.check_output([str(v) for v in argv], text=True).strip()
@@ -514,7 +518,12 @@ def main():
         return 0
     except Exception as error:
         reason = ": " + str(error) if isinstance(error, (ValueError, RuntimeError, FileExistsError)) else ""
-        print("Build failed: " + type(error).__name__ + reason + "; inspect local work/tools.log", file=sys.stderr)
+        if isinstance(error, sp.CalledProcessError):
+            # Never print str(error): it includes all arguments and possibly private input.
+            tool = Path(str(error.cmd[0])).name if isinstance(error.cmd, (list, tuple)) and error.cmd else "subprocess"
+            reason = f": {tool}; exit code {error.returncode}"
+        log_path = str(build.work / "tools.log") if build is not None else "local work/tools.log"
+        print("Build failed: " + type(error).__name__ + reason + "; inspect " + log_path, file=sys.stderr)
         if build is not None:
             build.note("Build failed: " + type(error).__name__)
             build.report("failed", error)

@@ -1,5 +1,5 @@
 """Progress must keep subprocess behavior and private output boundaries intact."""
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 import importlib.util
 import io
 from pathlib import Path
@@ -8,7 +8,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("progress_builder", ROOT / "scripts/build.py")
@@ -44,7 +44,23 @@ class BuildProgress(unittest.TestCase):
             self.build.run([sys.executable, "-c", "raise SystemExit(7)"], label="Checking packages")
         self.assertEqual(raised.exception.returncode, 7)
         self.assertIn("Failed: Checking packages", console.getvalue())
+        self.assertIn("Command failed: Checking packages; exit code 7", console.getvalue())
         self.assertNotIn("Completed:", console.getvalue())
+
+    def test_build_failure_shows_tool_exit_code_and_exact_log_path_without_arguments(self):
+        build = Mock(work=self.build.work, loop=None)
+        build.ubuntu.side_effect = subprocess.CalledProcessError(100, ["debootstrap", "private-argument"])
+        console = io.StringIO()
+        with patch.object(builder.sys, "argv", ["build.py"]), \
+                patch.object(builder, "Build", return_value=build), \
+                patch.object(builder.signal, "signal"), \
+                patch.object(builder.os, "umask"), redirect_stderr(console):
+            self.assertEqual(builder.main(), 1)
+        self.assertIn("debootstrap; exit code 100", console.getvalue())
+        self.assertIn(str(build.work / "tools.log"), console.getvalue())
+        self.assertNotIn("private-argument", console.getvalue())
+        build.report.assert_called_once_with("failed", build.ubuntu.side_effect)
+        build.unmount_to.assert_called_once_with(0)
 
     def test_heartbeat_stops_on_success_and_interruption(self):
         real_thread = threading.Thread
