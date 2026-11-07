@@ -76,8 +76,13 @@ grep -qx 'DefaultLimitCORE=0:0' /etc/systemd/system.conf.d/99-customizer-core.co
 grep -qx '\* hard core 0' /etc/security/limits.d/99-customizer-core.conf
 server-info --help
 server-update --help
-tmux -L customizer-check -f /etc/tmux.conf new-session -d -s check
-tmux -L customizer-check show-options -gv mouse
+ubuntu_home=$(getent passwd ubuntu | cut -d: -f6)
+runuser -u ubuntu -- env HOME="$ubuntu_home" bash -se <<'TMUX_CHECK'
+set -euo pipefail
+trap 'tmux -L customizer-check kill-server 2>/dev/null || true' EXIT
+tmux -L customizer-check new-session -d -s check
+[[ $(tmux -L customizer-check show-options -gv mouse) == on ]]
 [[ $(tmux -L customizer-check show-options -gv history-limit) == 50000 ]]
-tmux -L customizer-check kill-server
+[[ $(tmux -L customizer-check show-options -gv base-index) == 1 ]]
+TMUX_CHECK
 echo 'Ubuntu guest validation passed'

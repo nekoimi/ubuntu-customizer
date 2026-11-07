@@ -10,6 +10,7 @@ BASH = shutil.which("bash") if os.name != "nt" else shutil.which("bash", path=r"
 SCRIPT = (ROOT / "scripts/check-guest.sh").read_text()
 CHECKS = SCRIPT[SCRIPT.index("sshd -t\n"):SCRIPT.index("\ngrep -q '^Signed-By:")]
 TRAP = next(line for line in SCRIPT.splitlines() if line.startswith("trap "))
+TMUX_CHECK = SCRIPT.split("<<'TMUX_CHECK'\n", 1)[1].split("\nTMUX_CHECK", 1)[0]
 
 
 @unittest.skipUnless(BASH, "Bash is required for guest check regressions")
@@ -60,6 +61,27 @@ apt-config() {
         result = self.run_checks(apt_status=8)
         self.assertEqual(result.returncode, 8)
         self.assertIn("apt_configuration=$(apt-config dump)", result.stderr)
+
+    def test_tmux_default_startup_checks_mouse_and_always_cleans_up(self):
+        for mouse in ("on", "off"):
+            stub = r'''
+tmux() {
+    case "$*" in
+        '-L customizer-check new-session -d -s check') return 0 ;;
+        '-L customizer-check show-options -gv mouse') printf '%s\n' "$TEST_MOUSE" ;;
+        '-L customizer-check show-options -gv history-limit') echo 50000 ;;
+        '-L customizer-check show-options -gv base-index') echo 1 ;;
+        '-L customizer-check kill-server') echo 'tmux test server cleaned up' ;;
+        *) echo 'unexpected tmux invocation' >&2; return 2 ;;
+    esac
+}
+'''
+            with self.subTest(mouse=mouse):
+                result = subprocess.run([BASH, "-s"], input=stub + TMUX_CHECK,
+                                        text=True, capture_output=True,
+                                        env={**os.environ, "TEST_MOUSE": mouse})
+                self.assertEqual(result.returncode, 0 if mouse == "on" else 1, result.stderr)
+                self.assertIn("tmux test server cleaned up", result.stdout)
 
 
 if __name__ == "__main__":
