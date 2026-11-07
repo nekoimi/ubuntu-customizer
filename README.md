@@ -1,0 +1,42 @@
+# Ubuntu Customizer
+
+通过 Alpine Live 安装环境部署预先初始化完成的 Ubuntu Server 磁盘镜像，制作可离线安装的启动 ISO。
+
+当前处于方案设计阶段，构建与安装功能尚未实现。
+
+详细设计见 [Ubuntu Server 定制镜像与整盘安装方案](docs/Ubuntu-Server-定制镜像方案.md)。
+
+待确定的配置与建议默认值见 [待确认事项](docs/待确认事项.md)。
+
+已确认的基础预装集合及可选工具见 [基础工具清单](docs/基础工具候选清单.md)。
+
+编译工具、Python、uv 和国内包源配置见 [开发环境预装清单](docs/开发环境预装清单.md)。
+
+现有 Ubuntu Server 22.04 构建宿主及 workflow 接入建议见 [构建与 GitHub Actions 方案](docs/构建与GitHub-Actions方案.md)。
+
+已明确的要求：
+
+- 目标系统为 Ubuntu Server 24.04 LTS，具体点版本及官方 ISO 摘要由构建配置锁定。
+- 仅制作 x86_64 / amd64，安装 ISO 与目标系统均支持 UEFI 和传统 BIOS；首版不支持 Secure Boot，使用时关闭该功能。
+- 面向常见 PC、服务器及普通 SATA / NVMe SSD、HDD，无特殊硬件驱动需求。
+- 在构建镜像时安装系统工具、开发依赖和 Docker，移除 Snap。
+- 基础工具清单第 1 节全部纳入预装，第 2 节基础系统能力保留并验收，第 3 节可选工具不自动纳入。
+- 预装编译工具、发行版 Python、venv / pip / 开发头文件与 uv；pip 使用国内源。
+- 不预装 Node.js、Java、Go、Rust，以及数据库与 Web 服务。
+- 预装 Docker Engine、CLI、containerd、Buildx 与 Compose 插件，使用构建时国内 Docker APT 仓库可用的最新兼容稳定版本，并记录实际版本。
+- Ubuntu APT 与 Docker 的 APT 安装仓库均使用国内镜像源，并在安装后保留；不配置 Docker 镜像加速地址。
+- 采用阿里云 Ubuntu / Docker APT 源、清华 pip / uv 源；SSH 使用 22 端口和 `ubuntu` 密码登录，网络使用 DHCP，主机名由安装器自动生成。
+- 采用 2 GiB 交换文件，`ubuntu` 通过 sudo 管理 Docker；上海时区、默认英文环境并预留中文 locale，安装结束后手动重启。
+- 保留系统更新检查和提示，关闭自动安装及自动重启，由用户手动维护补丁。
+- 安装结束后的第一次启动即可使用，不依赖首次开机初始化脚本。
+- 镜像预设首个普通用户 `ubuntu`（UID/GID 均为 `1000`）与已经指定的初始密码，安装时不询问；进入系统后自行修改密码，不强制首次登录改密。初始密码保存在本地不入库的 `config/local.env`。
+- 沿用 Ubuntu Server 的 sudo 管理方式，root 保持锁定，不设置 root 密码，不开放 root 直接登录。
+- 选盘界面倒计时 30 秒，无操作时选择容量最大的合格硬盘。
+- 选盘后等待一次明确清盘确认，确认步骤不设倒计时，未确认前不清盘或写入。
+- 自动选盘排除安装介质、只读盘、容量不足和被占用的设备。
+- 完整 ISO 保存到构建服务器 `/srv/ubuntu-customizer/releases/<build-id>/`；GitHub 只上传脱敏日志、清单、校验和与测试报告，不上传 ISO 或其他磁盘镜像。
+- 最终验收由用户自行使用虚拟机及实体机器 U 盘安装完成；构建流程提供自动检查结果和待验收 ISO。
+- 首版支持 ISO 直接整盘写入 U 盘及虚拟机直接挂载 ISO，暂不适配 Ventoy。
+- 首版不制定最小设备规格；安装器仍检查目标盘容量等必要条件。
+
+系统产品配置已全部确定；后续需落实 GitHub 仓库及 Runner 接入信息。当前仍处于方案设计阶段，本地密码配置尚未接入构建脚本。
