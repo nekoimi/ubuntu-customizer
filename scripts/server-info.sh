@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ ${1:-} == --help || ${1:-} == -h ]]; then
-    echo 'Usage: server-info (read-only; sudo server-info also shows Docker daemon information)'
+    echo 'Usage: server-info (read-only; sudo server-info also shows firewall rules and Docker daemon information)'
     exit 0
 fi
 (($# == 0)) || { echo 'Usage: server-info' >&2; exit 2; }
@@ -28,10 +28,16 @@ section 'Disks and filesystems'
 inspect lsblk --output NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS
 df -hT -x tmpfs -x devtmpfs
 section 'Service state'
-for unit in ssh docker containerd tailscaled systemd-timesyncd; do
+for unit in ssh ufw docker containerd tailscaled systemd-timesyncd; do
     state=$(systemctl is-active "$unit" 2>/dev/null) || true
     printf '%s: %s\n' "$unit" "${state:-unavailable}"
 done
+section 'Host firewall'
+if [[ $EUID == 0 ]]; then
+    inspect ufw status verbose
+else
+    echo 'Run sudo server-info or sudo ufw status verbose to view live rules.'
+fi
 section 'Docker'
 inspect docker --version
 inspect docker info --format 'Server={{.ServerVersion}} Containers={{.Containers}} Running={{.ContainersRunning}} Images={{.Images}}'

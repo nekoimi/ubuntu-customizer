@@ -14,28 +14,39 @@ done < /tmp/customizer/packages.txt
 for package in docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin tailscale; do
     [[ $(dpkg-query -W -f='${db:Status-Status}' "$package") == installed ]]
 done
-if id -nG ubuntu | tr ' ' '\n' | grep -qx docker; then exit 1; fi
+ubuntu_groups=$(runuser -u ubuntu -- id -nG)
+if grep -qw docker <<< "$ubuntu_groups"; then exit 1; fi
 sudo_policy=$(sudo -l -U ubuntu)
 grep -q '(ALL : ALL) ALL' <<< "$sudo_policy"
 if grep -q NOPASSWD <<< "$sudo_policy"; then exit 1; fi
 if dpkg-query -W -f='${db:Status-Status}' snapd 2>/dev/null | grep -qx installed; then exit 1; fi
 [[ $(apt-cache policy snapd | awk '/Candidate:/ {print $2}') == '(none)' ]]
-for cmd in gcc g++ make cmake python3 pip3 uv uvx docker tailscale dig ss tcpdump tmux server-info server-update; do command -v "$cmd" >/dev/null; done
+for cmd in gcc g++ make cmake python3 pip3 uv uvx docker tailscale dig ss tcpdump tmux ufw server-info server-update; do command -v "$cmd" >/dev/null; done
 uv --version
 uvx --version
-docker --version
-docker buildx version
-docker compose version
+runuser -u ubuntu -- docker --version
+runuser -u ubuntu -- docker buildx version
+runuser -u ubuntu -- docker compose version
 tailscale version
 python3 -m venv /tmp/check-venv
 rm -rf /tmp/check-venv
 runuser -u ubuntu -- uv venv --offline --python /usr/bin/python3 /tmp/check-uv-venv
 rm -rf /tmp/check-uv-venv
 echo 'Checking service enablement and automatic update policy'
-for unit in ssh docker containerd tailscaled systemd-timesyncd apt-daily.timer fstrim.timer; do
+for unit in ssh ufw docker containerd tailscaled systemd-timesyncd apt-daily.timer fstrim.timer; do
     systemctl is-enabled "$unit" >/dev/null
 done
 [[ $(systemctl is-enabled apt-daily-upgrade.timer) == masked ]]
+[[ $(systemctl is-enabled nftables.service) == disabled ]]
+echo 'Checking persistent UFW configuration without changing live firewall rules'
+grep -qx 'ENABLED=yes' /etc/ufw/ufw.conf
+grep -qx 'IPV6=yes' /etc/default/ufw
+grep -qx 'MANAGE_BUILTINS=no' /etc/default/ufw
+grep -qx 'DEFAULT_INPUT_POLICY="DROP"' /etc/default/ufw
+grep -qx 'DEFAULT_OUTPUT_POLICY="ACCEPT"' /etc/default/ufw
+grep -qx 'DEFAULT_FORWARD_POLICY="DROP"' /etc/default/ufw
+grep -qx -- '-A ufw-user-input -p tcp --dport 22 -j ACCEPT' /etc/ufw/user.rules
+grep -qx -- '-A ufw6-user-input -p tcp --dport 22 -j ACCEPT' /etc/ufw/user6.rules
 if grep -q registry-mirrors /etc/docker/daemon.json; then exit 1; fi
 if grep -E '^[^#].*pam_motd\.so' /etc/pam.d/sshd; then exit 1; fi
 install -d /run/sshd

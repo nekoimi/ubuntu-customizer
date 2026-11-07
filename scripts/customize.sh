@@ -26,6 +26,7 @@ EOF
 printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
 chmod 755 /usr/sbin/policy-rc.d
 echo 'iperf3 iperf3/start_daemon boolean false' | debconf-set-selections
+echo 'ufw ufw/enable boolean false' | debconf-set-selections
 echo 'Installing Ubuntu base tools and development packages'
 apt-get update
 apt-get dist-upgrade -y --no-install-recommends
@@ -80,7 +81,8 @@ echo 'Configuring accounts, hostname, locale and networking'
 getent passwd ubuntu >/dev/null || useradd --uid 1000 --user-group --create-home --shell /bin/bash ubuntu
 [[ $(id -u ubuntu) == 1000 && $(id -g ubuntu) == 1000 ]]
 usermod -aG sudo ubuntu
-if id -nG ubuntu | tr ' ' '\n' | grep -qx docker; then gpasswd -d ubuntu docker; fi
+ubuntu_groups=$(id -nG ubuntu)
+if grep -qw docker <<< "$ubuntu_groups"; then gpasswd -d ubuntu docker; fi
 passwd -l root
 chage -M -1 -I -1 -E -1 ubuntu
 printf 'ubuntu-template\n' > /etc/hostname
@@ -171,9 +173,28 @@ root hard core 0
 EOF
 install -m 0755 /tmp/customizer/server-info.sh /usr/local/bin/server-info
 install -m 0755 /tmp/customizer/server-update.sh /usr/local/bin/server-update
+echo 'Configuring and testing UFW in an isolated network namespace'
+original_netns=$(readlink /proc/self/ns/net)
+UBUNTU_CUSTOMIZER_ORIGINAL_NETNS="$original_netns" unshare --net -- bash -se <<'FIREWALL_CONFIG'
+set -euo pipefail
+[[ -n ${UBUNTU_CUSTOMIZER_ORIGINAL_NETNS:-} && $(readlink /proc/self/ns/net) != "$UBUNTU_CUSTOMIZER_ORIGINAL_NETNS" ]] || {
+    echo 'Refusing to configure UFW without a private network namespace.' >&2
+    exit 1
+}
+sed -i 's/^IPV6=.*/IPV6=yes/; s/^MANAGE_BUILTINS=.*/MANAGE_BUILTINS=no/' /etc/default/ufw
+ufw default deny incoming
+ufw default allow outgoing
+ufw default deny routed
+ufw allow 22/tcp
+ufw --force enable
+firewall_status=$(ufw status verbose)
+printf '%s\n' "$firewall_status"
+grep -qx 'Status: active' <<< "$firewall_status"
+grep -q '^Default: deny (incoming), allow (outgoing), deny (routed)' <<< "$firewall_status"
+FIREWALL_CONFIG
 echo 'Configuring enabled services and automatic update policy'
 systemctl disable ssh.socket
-systemctl enable ssh docker containerd tailscaled systemd-networkd systemd-resolved systemd-timesyncd apt-daily.timer fstrim.timer
+systemctl enable ssh ufw docker containerd tailscaled systemd-networkd systemd-resolved systemd-timesyncd apt-daily.timer fstrim.timer
 systemctl mask apt-daily-upgrade.timer apt-daily-upgrade.service
 for unit in iperf3.service vnstat.service smartmontools.service sysstat.service sysstat-collect.timer sysstat-summary.timer nftables.service; do
   systemctl disable "$unit" 2>/dev/null || true
