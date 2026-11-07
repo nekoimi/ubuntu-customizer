@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build in a private Linux mount namespace. No host block device is a target."""
 import argparse
+from contextlib import contextmanager
 import datetime as dt
 import hashlib
 import gzip
@@ -15,6 +16,7 @@ import signal
 import subprocess as sp
 import sys
 import tarfile
+import threading
 import time
 import urllib.request
 
@@ -27,6 +29,7 @@ else:
 
 REPO = Path(__file__).resolve().parents[1]
 GIB = 1024 ** 3
+PROGRESS_INTERVAL = 30
 
 
 def digest(path):
@@ -137,12 +140,40 @@ class Build:
         self.logs.append(line)
         print(line, flush=True)
 
-    def run(self, argv, **kwargs):
+    @contextmanager
+    def progress(self, label, *, announce=True):
+        """Report elapsed time without exposing tool output, arguments or stdin."""
+        started = time.monotonic()
+        stopped = threading.Event()
+        if announce:
+            self.note("Starting: " + label)
+
+        def heartbeat():
+            while not stopped.wait(PROGRESS_INTERVAL):
+                self.note(f"Still running: {label} ({time.monotonic() - started:.0f}s elapsed; details in tools.log)")
+
+        ticker = threading.Thread(target=heartbeat, daemon=True)
+        ticker.start()
+        outcome = "Completed"
+        try:
+            yield
+        except BaseException:
+            outcome = "Failed"
+            raise
+        finally:
+            stopped.set()
+            ticker.join()
+            elapsed = time.monotonic() - started
+            if announce or elapsed >= PROGRESS_INTERVAL:
+                self.note(f"{outcome}: {label} ({elapsed:.1f}s)")
+
+    def run(self, argv, *, label=None, **kwargs):
         # Raw tool output is local only, never streamed to Actions.
         with (self.work / "tools.log").open("ab") as log:
             log.write(("\n$ " + shlex.join(str(value) for value in argv) + "\n").encode())
             log.flush()
-            return sp.run([str(v) for v in argv], stdout=log, stderr=sp.STDOUT, check=True, **kwargs)
+            with self.progress(label or Path(str(argv[0])).name, announce=label is not None):
+                return sp.run([str(v) for v in argv], stdout=log, stderr=sp.STDOUT, check=True, **kwargs)
 
     def output(self, argv):
         return sp.check_output([str(v) for v in argv], text=True).strip()
@@ -169,14 +200,14 @@ class Build:
             self.run(["umount", "--recursive", target])
             self.mounts.pop()
 
-    def guest(self, root, script, environment=None):
+    def guest(self, root, script, environment=None, *, label=None):
         command = ["chroot", root, "/usr/bin/env", "-i", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root", "LC_ALL=C.UTF-8", "UBUNTU_CUSTOMIZER_GUEST=1"]
         command += [key + "=" + value for key, value in (environment or {}).items()]
         command += ["/bin/bash", "-se"]
         # stdin is never logged; proxy credentials must not appear in command arguments.
         exports = "".join("export " + key + "=" + shlex.quote(value) + "\n"
                           for key, value in self.proxy_env.items())
-        self.run(command, input=(exports + script).encode())
+        self.run(command, label=label, input=(exports + script).encode())
 
     def preflight(self):
         import fcntl
@@ -220,23 +251,25 @@ class Build:
         self.mount([self.loop + "p3"], root)
         # Jammy's debootstrap generic Ubuntu script also supports noble on a 22.04 host.
         script = "/usr/share/debootstrap/scripts/gutsy"
-        self.run(["debootstrap", "--arch=amd64", "--merged-usr", "--variant=minbase", "--keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg", "noble", root, self.config["ubuntu_mirror"], script])
+        self.run(["debootstrap", "--arch=amd64", "--merged-usr", "--variant=minbase", "--keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg", "noble", root, self.config["ubuntu_mirror"], script], label="Installing Ubuntu base system (debootstrap)")
         self.mount([self.loop + "p2"], root / "boot/efi")
         self.api_mounts(root)
         tools = root / "tmp/customizer"
         tools.mkdir()
         (tools / "build-root").write_text(self.id + "\n")
         shutil.copyfile(REPO / "config/packages.txt", tools / "packages.txt")
-        self.uv(tools)
+        with self.progress("Downloading and verifying uv from GitHub"):
+            self.uv(tools)
         self.guest(root, (REPO / "scripts/customize.sh").read_text(), {
             "UBUNTU_MIRROR": self.config["ubuntu_mirror"],
-            "DOCKER_MIRROR": self.config["docker_mirror"], "PYTHON_INDEX": self.config["python_index"]})
+            "DOCKER_MIRROR": self.config["docker_mirror"], "PYTHON_INDEX": self.config["python_index"]},
+            label="Installing packages and configuring Ubuntu, Docker and Tailscale")
         self.run(["chroot", root, "chpasswd", "--encrypted"], input=("ubuntu:" + self.password_hash + "\n").encode())
         root_uuid = self.output(["blkid", "-s", "UUID", "-o", "value", self.loop + "p3"])
         esp_uuid = self.output(["blkid", "-s", "UUID", "-o", "value", self.loop + "p2"])
         (root / "etc/fstab").write_text(f"UUID={root_uuid} / ext4 defaults 0 1\nUUID={esp_uuid} /boot/efi vfat umask=0077 0 2\n/swapfile none swap sw 0 0\n")
-        self.guest(root, "update-initramfs -u -k all\ngrub-install --target=i386-pc --recheck " + self.loop + "\ngrub-install --target=x86_64-efi --efi-directory=/boot/efi --removable --no-nvram --no-uefi-secure-boot\nupdate-grub\n")
-        self.guest(root, (REPO / "scripts/check-guest.sh").read_text())
+        self.guest(root, "update-initramfs -u -k all\ngrub-install --target=i386-pc --recheck " + self.loop + "\ngrub-install --target=x86_64-efi --efi-directory=/boot/efi --removable --no-nvram --no-uefi-secure-boot\nupdate-grub\n", label="Generating initramfs and installing BIOS / UEFI bootloaders")
+        self.guest(root, (REPO / "scripts/check-guest.sh").read_text(), label="Checking Ubuntu packages and configuration")
         self.checks["ubuntu_packages_and_config"] = "passed"
         for name in ("packages.txt", "package-origins.txt"):
             shutil.copyfile(root / "var/lib/ubuntu-customizer" / name, self.release / name)
@@ -254,7 +287,7 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
         (root / "var/lib/ubuntu-customizer/build-id").write_text(self.id + "\n")
         self.details["kernel"] = sorted(p.name for p in (root / "boot").glob("vmlinuz-*"))
         self.unmount_to(0)
-        self.run(["zerofree", self.loop + "p3"])
+        self.run(["zerofree", self.loop + "p3"], label="Zeroing free space in Ubuntu image")
         self.run(["losetup", "--detach", self.loop])
         self.loop = None
         self.note("Ubuntu packages/configuration checks passed; image unmounted")
@@ -291,20 +324,22 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
         if not re.fullmatch(r"latest-stable|v3\.[0-9]+", release):
             raise ValueError("Invalid Alpine branch")
         metadata = self.work / "alpine-releases.yaml"
-        download(f"{mirror}/{release}/releases/x86_64/latest-releases.yaml", metadata)
+        with self.progress("Downloading Alpine release metadata"):
+            download(f"{mirror}/{release}/releases/x86_64/latest-releases.yaml", metadata)
         entry = next(item for item in yaml.safe_load(metadata.read_text()) if item.get("flavor") == "alpine-minirootfs")
         branch = entry["branch"]
         name = entry["file"]
         if not re.fullmatch(r"v3\.[0-9]+", branch) or Path(name).name != name:
             raise RuntimeError("Unexpected Alpine release metadata")
         archive = self.work / name
-        download(f"{mirror}/{branch}/releases/x86_64/{name}", archive, entry["sha256"])
+        with self.progress("Downloading and verifying Alpine minirootfs"):
+            download(f"{mirror}/{branch}/releases/x86_64/{name}", archive, entry["sha256"])
         root = self.work / "alpine"
         root.mkdir()
         self.run(["tar", "-xzf", archive, "-C", root])
         (root / "etc/apk/repositories").write_text(f"{mirror}/{branch}/main\n{mirror}/{branch}/community\n")
         self.api_mounts(root)
-        self.run(["chroot", root, "apk", "add", "--no-cache", "alpine-base", "linux-firmware-none", "linux-lts", "busybox-static", "python3", "bash", "util-linux", "lsblk", "findmnt", "parted", "gptfdisk", "e2fsprogs", "e2fsprogs-extra", "dosfstools", "zstd", "coreutils", "kmod"])
+        self.run(["chroot", root, "apk", "add", "--no-cache", "alpine-base", "linux-firmware-none", "linux-lts", "busybox-static", "python3", "bash", "util-linux", "lsblk", "findmnt", "parted", "gptfdisk", "e2fsprogs", "e2fsprogs-extra", "dosfstools", "zstd", "coreutils", "kmod"], label="Installing Alpine Live packages (APK)")
         library = root / "usr/local/lib/ubuntu-customizer"
         library.mkdir(parents=True)
         for name in ("installer.py", "finalize.sh"):
@@ -361,13 +396,16 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
         payload = iso / "payload"
         payload.mkdir(parents=True)
         self.note("Hashing and compressing the complete Ubuntu disk image")
+        with self.progress("Calculating Ubuntu disk image SHA256"):
+            raw_hash = digest(raw)
         self.details.update({"format": 1, "sector_size": 512, "root_partition": 3, "esp_partition": 2,
-                             "raw_bytes": raw.stat().st_size, "raw_sha256": digest(raw)})
+                             "raw_bytes": raw.stat().st_size, "raw_sha256": raw_hash})
         compressed = payload / "ubuntu.img.zst"
-        self.run(["zstd", "-T" + str(self.config["compression_threads"]), "-8", raw, "-o", compressed])
-        self.run(["zstd", "--test", compressed])
+        self.run(["zstd", "-T" + str(self.config["compression_threads"]), "-8", raw, "-o", compressed], label="Compressing Ubuntu disk image (zstd)")
+        self.run(["zstd", "--test", compressed], label="Verifying compressed disk image")
         self.checks["compressed_stream"] = "passed"
-        self.details["compressed_sha256"] = digest(compressed)
+        with self.progress("Calculating compressed image SHA256"):
+            self.details["compressed_sha256"] = digest(compressed)
         self.alpine(iso)
         self.details["sources"] = {key: self.config[key] for key in ("ubuntu_mirror", "docker_mirror", "python_index")}
         self.details["sources"]["tailscale"] = "https://pkgs.tailscale.com/stable/ubuntu"
@@ -390,15 +428,16 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
         shutil.copyfile(REPO / "LICENSE", iso / "LICENSE")
         # Package copyright notices accompany the installed system; Alpine notices remain in live root.
         output = self.release / "ubuntu-custom-server.iso.partial"
-        self.run(["grub-mkrescue", "-o", output, iso, "--", "-volid", "UCINSTALL", "-compliance", "iso_9660_level=3"])
+        self.run(["grub-mkrescue", "-o", output, iso, "--", "-volid", "UCINSTALL", "-compliance", "iso_9660_level=3"], label="Packaging BIOS / UEFI installer ISO")
         boot_report = sp.check_output(["xorriso", "-indev", str(output), "-report_el_torito", "plain"], stderr=sp.STDOUT, text=True)
         # xorriso writes report text to stdout; both firmware platform records are required.
         if not re.search(r"BIOS", boot_report) or not re.search(r"UEFI", boot_report):
             raise RuntimeError("ISO lacks dual firmware El Torito records")
         self.checks["bios_uefi_boot_catalog"] = "passed"
-        self.run(["xorriso", "-indev", output, "-check_media", "--"])
+        self.run(["xorriso", "-indev", output, "-check_media", "--"], label="Checking ISO media integrity")
         self.checks["iso_read_check"] = "passed"
-        iso_hash = digest(output)
+        with self.progress("Calculating ISO SHA256"):
+            iso_hash = digest(output)
         output.replace(self.release / "ubuntu-custom-server.iso")
         (self.release / "manifest.json").write_text(manifest)
         (self.release / "SHA256SUMS").write_text(iso_hash + "  ubuntu-custom-server.iso\n")

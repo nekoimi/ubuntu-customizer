@@ -18,6 +18,8 @@ bash build.sh build
 
 入口在需要时自动调用 sudo。构建编号默认自动生成，ISO 保存到 `/srv/ubuntu-customizer/releases/<build-id>/ubuntu-custom-server.iso`，终端会显示实际路径。`bash build.sh test` 可运行安全测试和静态检查，`bash build.sh --help` 查看用法。
 
+终端显示主要步骤的开始、完成和耗时；长时间运行时每 30 秒提示当前步骤仍在执行。详细下载、安装输出保存在终端提示的 `tools.log`，可在另一个终端用 `sudo tail -f <日志路径>` 查看。
+
 uv 从 GitHub API / Releases 下载，Tailscale 使用官方 `pkgs.tailscale.com` 源；这些站点访问较慢时，可在 `config/local.env` 配置 v2rayA 的 **HTTP 代理**（地址和端口按实际部署填写）：
 
 ```bash
