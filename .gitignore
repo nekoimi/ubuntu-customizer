@@ -1,2 +1,11 @@
 # Local build credentials
 /config/local.env
+/work/
+/reports/
+__pycache__/
+*.pyc
+*.iso
+*.raw
+*.img
+*.qcow2
+*.img.zst

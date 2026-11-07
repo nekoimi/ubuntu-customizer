@@ -1,0 +1,14 @@
+{
+  "ubuntu_suite": "noble",
+  "ubuntu_mirror": "https://mirrors.aliyun.com/ubuntu/",
+  "docker_mirror": "https://mirrors.aliyun.com/docker-ce/linux/ubuntu",
+  "python_index": "https://pypi.tuna.tsinghua.edu.cn/simple",
+  "alpine_release": "latest-stable",
+  "alpine_mirror": "https://dl-cdn.alpinelinux.org/alpine",
+  "uv_version": "latest",
+  "template_gib": 24,
+  "compression_threads": 4,
+  "work_dir": "/srv/ubuntu-customizer/work",
+  "release_dir": "/srv/ubuntu-customizer/releases",
+  "minimum_build_free_gib": 80
+}

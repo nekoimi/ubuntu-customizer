@@ -2,7 +2,21 @@
 
 通过 Alpine Live 安装环境部署预先初始化完成的 Ubuntu Server 磁盘镜像，制作可离线安装的启动 ISO。
 
-当前处于方案设计阶段，构建与安装功能尚未实现。
+已实现 Ubuntu 母镜像构建、Alpine Live ISO 打包和整盘安装器，当前以 **Ubuntu 构建机器直接执行命令行** 为主要方式。GitHub workflow 暂缓接入，保留代码且仍只允许手动触发。
+
+不需要 GitHub Runner、Actions Secret 或 Docker。详细步骤见 [构建与运行](docs/构建与运行.md)。当前尚未在 Linux 机器上完成完整构建及启动验收。
+
+```bash
+# Ubuntu 22.04 / 24.04 x86_64 构建服务器
+bash build.sh setup
+[ -f config/local.env ] || cp config/local.env.example config/local.env
+chmod 600 config/local.env
+nano config/local.env  # 填写约定的初始密码；已有配置可跳过编辑
+bash build.sh check
+bash build.sh build
+```
+
+入口在需要时自动调用 sudo。构建编号默认自动生成，ISO 保存到 `/srv/ubuntu-customizer/releases/<build-id>/ubuntu-custom-server.iso`，终端会显示实际路径。`bash build.sh test` 可运行安全测试和静态检查，`bash build.sh --help` 查看用法。
 
 详细设计见 [Ubuntu Server 定制镜像与整盘安装方案](docs/Ubuntu-Server-定制镜像方案.md)。
 
@@ -12,11 +26,11 @@
 
 编译工具、Python、uv 和国内包源配置见 [开发环境预装清单](docs/开发环境预装清单.md)。
 
-现有 Ubuntu Server 22.04 构建宿主及 workflow 接入建议见 [构建与 GitHub Actions 方案](docs/构建与GitHub-Actions方案.md)。
+暂缓实施的 GitHub 调度方式见 [构建与 GitHub Actions 方案](docs/构建与GitHub-Actions方案.md)。
 
 已明确的要求：
 
-- 目标系统为 Ubuntu Server 24.04 LTS，具体点版本及官方 ISO 摘要由构建配置锁定。
+- 目标系统为 Ubuntu Server 24.04 LTS，从已签名的 noble APT 仓库构建，记录实际软件版本和来源摘要。
 - 仅制作 x86_64 / amd64，安装 ISO 与目标系统均支持 UEFI 和传统 BIOS；首版不支持 Secure Boot，使用时关闭该功能。
 - 面向常见 PC、服务器及普通 SATA / NVMe SSD、HDD，无特殊硬件驱动需求。
 - 在构建镜像时安装系统工具、开发依赖和 Docker，移除 Snap。
@@ -36,9 +50,9 @@
 - 选盘界面倒计时 30 秒，无操作时选择容量最大的合格硬盘。
 - 选盘后等待一次明确清盘确认，确认步骤不设倒计时，未确认前不清盘或写入。
 - 自动选盘排除安装介质、只读盘、容量不足和被占用的设备。
-- 完整 ISO 保存到构建服务器 `/srv/ubuntu-customizer/releases/<build-id>/`；GitHub 只上传脱敏日志、清单、校验和与测试报告，不上传 ISO 或其他磁盘镜像。
+- 完整 ISO、日志、清单和报告保存到构建机器 `/srv/ubuntu-customizer/releases/<build-id>/`；手动构建不上传 GitHub。将来启用 workflow 时仅上传固定的小文件报告。
 - 最终验收由用户自行使用虚拟机及实体机器 U 盘安装完成；构建流程提供自动检查结果和待验收 ISO。
 - 首版支持 ISO 直接整盘写入 U 盘及虚拟机直接挂载 ISO，暂不适配 Ventoy。
 - 首版不制定最小设备规格；安装器仍检查目标盘容量等必要条件。
 
-系统产品配置已全部确定；后续需落实 GitHub 仓库及 Runner 接入信息。当前仍处于方案设计阶段，本地密码配置尚未接入构建脚本。
+构建脚本读取本地不入库的密码配置或 `UBUNTU_INITIAL_PASSWORD` 环境变量。当前只需在 Ubuntu 构建机器安装依赖、准备密码配置并执行本地入口；不需要注册 Runner。构建不依赖 KVM，最终虚拟机和实体机器验收由用户完成。

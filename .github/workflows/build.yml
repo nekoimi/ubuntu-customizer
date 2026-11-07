@@ -1,0 +1,53 @@
+name: Build Ubuntu installer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ubuntu-customizer-build
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install static check tools
+        run: sudo apt-get update && sudo apt-get install -y shellcheck python3-yaml
+      - name: Check scripts and safety tests
+        run: bash scripts/check.sh
+
+  build:
+    needs: checks
+    runs-on: [self-hosted, linux, x64, ubuntu-customizer]
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build and save ISO on server
+        env:
+          UBUNTU_INITIAL_PASSWORD: ${{ secrets.UBUNTU_INITIAL_PASSWORD }}
+        run: |
+          sudo --non-interactive --preserve-env=UBUNTU_INITIAL_PASSWORD bash scripts/build.sh \
+            --build-id "gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+      - name: Upload small public reports only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            reports/build-report.json
+            reports/build.log
+            reports/manifest.json
+            reports/packages.txt
+            reports/SHA256SUMS

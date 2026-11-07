@@ -1,173 +1,68 @@
 # 构建环境与 GitHub Actions 方案
 
-状态：可行性与接入设计；尚未创建 workflow、安装 Runner 或连接实际构建服务器。
+状态：GitHub workflow 接入暂缓，保留仅手动触发的配置。当前使用根目录 `build.sh` 在 Ubuntu 构建机器直接执行，不需要部署 Runner。本文保留 GitHub 方案供以后恢复；当前操作说明见 [构建与运行](构建与运行.md)。
 
-## 1. 当前已知条件
+## 1. 已采用的执行方式
 
-- 现有一台可以联网的 Linux x86_64 服务器，运行 Ubuntu Server 22.04 LTS。
-- 目标交付系统仍为 Ubuntu Server 24.04 LTS。
-- 可以考虑用 GitHub Actions workflow 触发和管理构建。
-- 产物保存方式已确定：完整 ISO 保存在构建服务器持久目录；GitHub 仅上传日志、清单、校验和与测试报告，不上传 ISO 或其他磁盘镜像大文件。
-- 最终完整安装验收由用户自行完成，使用虚拟机和实体机器 U 盘安装；首版 workflow 不强制实现双模式全量安装验收，保留构建自动检查和实际结果报告。
-- 安装介质首版支持 ISO 直接写入 U 盘和虚拟机直接挂载 ISO；暂不适配或验收 Ventoy。
-- 用户已提供服务器资源检查输出：i5-1240P、16 个逻辑 CPU、31 GiB 内存（当时可用约 27 GiB）、根分区当时可用约 143 GiB；VT-x 和 `/dev/kvm` 均已存在。
-- 这些信息足以支持首版构建的资源规划；最终 Runner 用户的 KVM 权限、实际 QEMU 启动和构建峰值占用仍待接入时验证。
+使用现有 Ubuntu Server 22.04 x86_64 服务器作为 self-hosted Runner，标签为 `ubuntu-customizer`。GitHub 负责手动触发、静态检查、任务状态和小文件报告，服务器负责完整构建和保存 ISO。
 
-Ubuntu 22.04 可以作为构建宿主，无需仅为本项目把宿主升级为 24.04。母系统在 Ubuntu 24.04 虚拟机磁盘中构建，Alpine 安装环境独立生成；宿主系统、母镜像和 Live 安装环境是三套环境。
+部署核对补充：当前服务器上的 Runner 实际通过 Docker Compose 运行，未开启特权或映射 loop 设备，且没有本项目标签和产物映射，不能直接执行当前完整构建。现有部署的逐项差异和专用构建虚拟机建议见 [构建与运行第 4.1 节](构建与运行.md#41-现有-docker-compose-runner-的适用情况)。尚未修改该 Compose 或部署专用构建环境。
 
-## 2. 两种 workflow 执行方式
+现有机器为 i5-1240P、16 个逻辑 CPU、31 GiB 内存，当时约 27 GiB available、根分区可用约 143 GiB。当前实现采用文件型 raw 磁盘 + debootstrap / chroot，不依赖 KVM 或宿主 Docker。此前讨论的 QEMU / autoinstall 构建方式未采用；用户仍可选择虚拟机完成最终验收。
 
-| 方式 | 真正执行构建的机器 | 优点 | 需要验证的条件 |
-|---|---|---|---|
-| GitHub 托管 Runner | GitHub 提供的 Linux x64 虚拟机，例如 `ubuntu-24.04` | 无需维护本地 Runner，每次任务使用临时环境 | 可用磁盘、QEMU/KVM 能力、权限、国内镜像连接速度、任务时限及产物存储额度 |
-| 自托管 Runner，建议 | 用户现有的 Ubuntu Server 22.04 | 可复用本地缓存，适合磁盘镜像和重复虚拟机验收，资源由本机决定 | 服务器资源、虚拟化能力、依赖和权限，以及 Runner 到 GitHub 的网络连接 |
+## 2. 触发与调度
 
-使用自托管 Runner 仍然是 GitHub workflow 构建：GitHub 负责触发、编排、日志和状态，服务器接收任务并执行脚本，不需要在公网开放 SSH 登录供 workflow 使用。
+`.github/workflows/build.yml` 的事件只有 `workflow_dispatch`：
 
-## 3. 建议采用的流程
+- 不设置 push、pull_request、schedule、release 或标签触发。
+- 只在仓库默认分支执行手动构建；选择其他分支会跳过任务。
+- GitHub 托管 `ubuntu-24.04` 任务执行 Python 安全测试、ShellCheck 和 Shell 语法检查。
+- 检查成功后，在 `[self-hosted, linux, x64, ubuntu-customizer]` 上执行完整构建。
+- 使用 concurrency 排队，`cancel-in-progress: false`，不因新构建取消旧任务；构建入口还有本机文件锁。
+- 构建任务时限 360 分钟，Artifact 保留 14 天。
 
-```text
-GitHub 仓库
-    │ 手动触发 workflow
-    ▼
-Ubuntu Server 22.04 自托管 Runner
-    ├─ 环境预检：资源、权限、网络、KVM
-    ├─ 下载并校验官方 Ubuntu 24.04 介质
-    ├─ QEMU/KVM 安装及定制母系统
-    ├─ 导出、压缩磁盘镜像
-    ├─ 构建 Alpine Live 双启动 ISO
-    ├─ 软件、配置、镜像完整性及双启动文件检查
-    └─ 保存 ISO、校验和、清单和报告
-    │
-    ▼
-完整 ISO 保存在服务器持久目录；GitHub Artifact 仅上传日志和报告等小文件
-    │
-    ▼
-用户获取 ISO，自行执行虚拟机和实体机器 U 盘安装验收
-```
+本地和 workflow 使用同一入口 `sudo bash scripts/build.sh`，不依赖必须存在的 GitHub 环境变量。workflow 通过 `--build-id gha-<run_id>-<run_attempt>` 区分产物。
 
-第一步先让同一套构建脚本能够在服务器终端运行，再接入 workflow。Runner 只负责调度，不让脚本绑定必须存在的 GitHub 环境变量，便于本地排错和复用。
+## 3. 资源与隔离
 
-建议从手动触发开始，同一服务器的镜像任务串行执行；不要因每次普通文档提交都启动完整镜像构建。自托管任务仅运行本仓库可信分支，不接收外部 PR 的任意脚本执行。
+默认模板磁盘为 24 GiB、压缩并行度 4。构建前检查当前可用磁盘至少 80 GiB、MemAvailable 至少 4 GiB、必要工具以及 BIOS / UEFI 的 GRUB 模块。模板容量和资源阈值通过 `config/build.json` 调整，现有服务器的首次峰值仍需实际测量。
 
-## 4. 现有服务器检查结果与资源规划
+构建脚本创建 raw 文件并分配 loop 设备，所有母镜像挂载位于私有挂载命名空间；不接受宿主物理磁盘参数。构建期间禁止 guest 包自动启动服务。换源、创建账号、移除 Snap、安装 Docker / Tailscale 均作用于 guest 根目录。
 
-用户已在 Ubuntu 22.04 服务器执行以下只读命令并提供结果：
+宿主仅需要运行 `scripts/setup-host.sh` 安装构建工具，不更换宿主软件源、不创建交付账号，也不卸载宿主软件。
 
-```bash
-lscpu
-ls -l /dev/kvm
-free -h
-df -h /
-```
+## 4. 产物保留
 
-### 4.1 已提供的检查结果
+完整 ISO 保存到 `/srv/ubuntu-customizer/releases/<build-id>/ubuntu-custom-server.iso`，与 Runner `_work` 和工作目录分开。构建结果保存并校验后再上传小文件；上传失败不会删除本地 ISO。用户使用 SFTP / SCP 获取文件。
 
-| 项目 | 用户提供的结果 | 判断 |
+| 内容 | 构建服务器 | GitHub Artifact |
 |---|---|---|
-| CPU | Intel Core i5-1240P，x86_64，16 个逻辑 CPU | 满足首版构建与串行虚拟机验收的 CPU 规划 |
-| 硬件虚拟化 | VT-x，CPU flags 含 vmx | CPU 具备硬件虚拟化能力 |
-| KVM 设备 | `/dev/kvm` 存在，权限 `crw-rw---- root:kvm` | KVM 内核设备已具备；不能据此判断最终 Runner 用户可访问 |
-| 内存 | 总计约 31 GiB，当时 available 约 27 GiB | 满足首版规划；不把仅约 1.3 GiB 的 free 列误当作全部可用内存 |
-| 根文件系统 | 总计约 466 GiB，当时可用约 143 GiB | 可安排首版工作目录，构建前仍需重新检查 |
-| Swap | 当前没有 swap | 现有可用内存适合串行构建，不要求仅为本项目先调整宿主交换空间 |
+| 完整 ISO | 保存 | 不上传 |
+| raw、压缩磁盘、Live 根文件系统 | 保留在 work 目录 | 不上传 |
+| ISO SHA256、manifest、Ubuntu 包版本清单 | 保存 | 上传固定文件 |
+| 工具原始输出 | 私有 work 目录；另存脱敏副本到 releases/logs | 不上传 |
+| 阶段摘要和构建检查结果 | 保存 | 上传固定文件 |
 
-内存中的 buff/cache 可以部分回收，判断资源应优先看 available。CPU 的 16 表示逻辑处理器数量，不表示 16 个物理核心。
+上传路径只有 `reports/build-report.json`、`reports/build.log`、`reports/manifest.json`、`reports/packages.txt`、`reports/SHA256SUMS`。不使用目录通配打包，不把 ISO 通过 Artifact、Release、Cache、Git LFS、分片等方式传到 GitHub。
 
-### 4.2 接入时仍需验证的内容
+原始工具日志与磁盘文件不进入报告暂存目录。初始密码和哈希不进入公共 manifest，报告不包含异常中的任意命令输出。完整工作目录和历史产物不自动删除，需按实际磁盘占用管理。
 
-- 确定实际运行构建的用户，检查其是否拥有 `/dev/kvm` 的读写权限；使用 kvm 组等正常权限方式，不将设备改为所有用户可写。
-- 使用同一用户实际运行 QEMU/KVM 小型测试，不能只检查设备文件存在。
-- 确定构建目录；若放在其他文件系统，重新核对该目录所在文件系统的可用空间。
-- 检查构建依赖、国内源及 GitHub 连通性，不要求用户重新提供已经明确的硬件参数。
+## 5. 凭证与 Runner 接入
 
-### 4.3 建议的初始资源配置
+GitHub 使用 `UBUNTU_INITIAL_PASSWORD` Actions Secret；本地构建可以使用不入库的 `config/local.env`。Secret 通过环境变量和标准输入使用，不作为命令行参数，不执行 `set -x`。
 
-- 同时只运行一个完整镜像构建任务；如补充自动启动测试，串行执行。
-- 母系统构建虚拟机先分配 4 个 vCPU、8 GiB 内存，可选自动检查虚拟机按需使用较低配置；用户最终验收所用虚拟机由用户自行安排。
-- 压缩先限制为 4 个线程，避免长期占满这台现有服务器的全部 CPU。
-- 工作目录初步预算 80–100 GiB，记录实际峰值；不因目标系统将来安装到大硬盘而生成同等容量的完整母镜像。
-- 每次任务检查当前可用内存和磁盘，避免把此次用户提供的快照当作长期固定资源。
-- 控制工作副本、验收虚拟盘和历史产物数量；清理只针对本项目管理的文件。
+Runner 安装注册、标签、服务账号 sudo 配置和 Secret 设置需要在实际仓库及服务器部署，具体步骤见 [构建与运行](构建与运行.md)。当前没有代为注册或访问远端服务器，也没有推送代码。
 
-资源初步建议为 4 个或更多逻辑 CPU、8–16 GiB 内存、80–100 GiB 可用构建空间。此处是第一版容量规划参考，不是已测最低要求；需要容纳源 ISO、母镜像、工作副本、压缩产物和验收虚拟盘，最终以实测峰值为准。
+Runner 能执行 root 构建脚本，因此只为可信仓库、默认分支和维护者提供执行环境。交付系统中的 `ubuntu` 用户使用正常的密码 sudo，这与 Runner 权限配置无关。
 
-无 KVM 时，QEMU 可以使用软件模拟执行，但母镜像安装和可选自动启动测试可能明显变慢。不能仅因物理机支持虚拟化就假定 Runner 已拥有所需设备和权限。
+## 6. 验收与当前验证边界
 
-构建依赖预计包括 QEMU、OVMF、SeaBIOS、磁盘与文件系统工具、xorriso、压缩及校验工具；Alpine 环境生成方式可按实现使用容器或隔离目录。具体依赖和命令版本由 Ubuntu 22.04 构建脚本管理。
+构建中执行 Ubuntu 软件和配置检查、压缩流校验、双模式 El Torito 目录检查及 ISO 读取检查。当前没有在构建时真正启动目标 Ubuntu，Docker 守护进程、Tailscale 联网、BIOS / UEFI 引导及实体机器兼容性需要最终验收。
 
-换源、软件安装和 Snap 清理作用于母镜像内的 Ubuntu，不将构建服务器的软件源、用户、Docker 或磁盘当作目标系统修改。安装测试仅向明确创建的虚拟磁盘写入。
+报告区分构建检查和人工验收：未实际运行的启动与安装测试写 `not_run`，人工验收写 `pending`。用户按主方案第 14 节使用虚拟机和实体 U 盘安装进行验收；不会把静态检查成功当作硬件验收通过。
 
-## 5. GitHub 托管 Runner 的适用边界
+## 7. 官方参考
 
-截至本方案核对的 GitHub 官方文档，标准 Linux x64 Runner 的工作磁盘额度为 14 GB，单个 GitHub 托管任务最长执行 6 小时。实际剩余空间必须在任务启动后检测，不能把文档额度当作当前空闲空间。
-
-当前原始 ISO、完整母镜像、解包文件树和验收磁盘会同时占用空间，完整流水线不能默认适合标准托管 Runner。更大规格 Runner 可另行评估费用和可用条件。
-
-如果试用托管构建：
-
-- 使用明确的 Linux x64 Runner 标签，不把 `ubuntu-latest` 的未来变化带入构建输入。
-- 在任务中实际检测 `/dev/kvm` 和 QEMU 能力，不仅凭 Runner 标签推断可用。
-- 测量国内 APT、PyPI 镜像下载速度；仍遵守已经确定的国内源要求。
-- 按需拆分构建与验收任务，明确镜像传输、磁盘和时限成本。
-- 即使托管任务完成静态检查，也不能将未执行的 BIOS / UEFI 完整安装验收标记为通过。
-
-第一版建议 GitHub 托管任务承担文档、脚本静态检查，自托管服务器承担完整构建与必要的自动检查，用户承担最终虚拟机和实体机器验收。workflow 接入方式仍需落实，不将用户验收变成必需在构建服务器执行的全量测试任务。
-
-## 6. 产物与构建配置
-
-### 6.1 已确定的保存位置
-
-| 内容 | 构建服务器 | GitHub |
-|---|---|---|
-| 完整安装 ISO | 持久保存，作为主产物 | 不上传 |
-| raw / qcow2 / img.zst 等磁盘镜像 | 按构建及排错需要本地保留 | 不上传 |
-| ISO SHA256、manifest 与软件版本清单 | 随 ISO 保存 | 上传小文件副本 |
-| 构建日志与测试报告 | 本地保存 | 脱敏后上传 Artifact |
-
-服务器默认持久目录采用 `/srv/ubuntu-customizer/releases/<build-id>/`，与仓库、Runner `_work` 和临时工作目录分开：
-
-```text
-/srv/ubuntu-customizer/releases/
-└─ <build-id>/
-   ├─ ubuntu-custom-server.iso
-   ├─ SHA256SUMS
-   ├─ manifest.json
-   ├─ packages.txt
-   ├─ logs/
-   └─ reports/
-```
-
-先将构建结果保存到服务器持久目录并完成校验，再执行小文件上传。GitHub 上传失败不影响本地 ISO 保留；用户通过 SFTP / SCP 获取 ISO，不默认启用公共下载服务。
-
-以上目录是待实现的保存约定，目前尚未在服务器创建。历史产物的保留数量根据实测空间占用管理，不把清理临时工作目录等同于删除持久产物。
-
-### 6.2 GitHub 上传范围
-
-- workflow 从专门整理的小文件目录上传 Artifact，显式列出日志、报告、清单和 SHA256，不对整个 `output/` 或持久产物根目录打包上传。
-- 不通过 Actions Artifact、Release、Actions Cache、Git LFS、分片或其他压缩归档形式上传 ISO / 磁盘镜像。
-- 日志和报告先移除初始密码、密码哈希、构建机密配置及其他凭据；软件清单与校验和不包含这些配置值。
-- Actions Artifact 的保留时间建议先设为 14 天，具体额度和计费按仓库与账号配置检查；这不改变服务器上的 ISO 保存策略。
-- 构建或测试失败时也保留并上传可用的小文件诊断记录，报告明确失败状态，不发布为验收成功的 ISO。
-- 自动检查成功后可以保存并提供“待人工验收”的 ISO；报告分别记录构建结果、实际执行的自动检查结果及用户验收状态，尚未收到人工结果时不标记为验收通过。
-
-### 6.3 构建配置
-
-- 预设初始密码或密码哈希通过 GitHub Actions Secret 或服务器本地不入库配置提供，不记录在日志和公共 manifest 中。
-- 重用本地下载缓存时按摘要校验，日志和报告记录实际依赖与工具版本。
-
-## 7. 当前仍需补充的构建信息
-
-1. 最终构建用户、实际工作目录，以及该用户的 KVM 权限与 QEMU 运行测试；CPU、内存和根分区容量已经提供，不再重复确认。
-2. 是否采用“GitHub workflow + 现有服务器自托管 Runner”的建议方式。
-3. GitHub 仓库是公开还是私有。产物保存方式已经确定为服务器本地保存 ISO、GitHub 上传小文件报告，不再重复确认是否上传 ISO。
-
-无需为确定方案提供服务器登录密码或 GitHub Token；安装 Runner 和执行实际构建属于后续实现步骤。
-
-## 8. 官方参考
-
-- [GitHub 托管 Runner 规格与能力](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
-- [GitHub Actions 使用限制](https://docs.github.com/en/actions/reference/limits)
+- [GitHub 手动触发工作流](https://docs.github.com/en/actions/managing-workflow-runs-and-deployments/managing-workflow-runs/manually-running-a-workflow)
 - [GitHub 自托管 Runner](https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/about-self-hosted-runners)
-
-平台规格、额度和支持范围可能变化，实施时重新核对所用 Runner 与账号配置。
+- [GitHub Actions 使用限制](https://docs.github.com/en/actions/reference/limits)
