@@ -262,6 +262,8 @@ class Build:
         tools.mkdir()
         (tools / "build-root").write_text(self.id + "\n")
         shutil.copyfile(REPO / "config/packages.txt", tools / "packages.txt")
+        for name in ("server-info.sh", "server-update.sh"):
+            shutil.copyfile(REPO / "scripts" / name, tools / name)
         with self.progress("Downloading and verifying uv from GitHub"):
             self.uv(tools)
         self.guest(root, (REPO / "scripts/customize.sh").read_text(), {

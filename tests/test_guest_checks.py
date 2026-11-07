@@ -26,7 +26,7 @@ emit_padding() {
 sshd() {
     if [[ $1 == -t ]]; then return 0; fi
     printf 'permitrootlogin %s\n' "$TEST_PERMIT_ROOT"
-    printf '%s\n' 'passwordauthentication yes' 'printmotd no' 'printlastlog no' 'banner none'
+    printf '%s\n' 'passwordauthentication yes' 'printmotd no' 'printlastlog no' 'banner none' 'clientaliveinterval 60' 'clientalivecountmax 3'
     emit_padding
     return "$TEST_SSH_STATUS"
 }

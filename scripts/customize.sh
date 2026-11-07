@@ -117,6 +117,8 @@ PermitRootLogin no
 PrintMotd no
 PrintLastLog no
 Banner none
+ClientAliveInterval 60
+ClientAliveCountMax 3
 EOF
 sed -i '/^[^#].*pam_motd\.so/s/^/# customizer: /' /etc/pam.d/sshd
 # Ubuntu's default ~/.bashrc displays a sudo introduction until this file exists.
@@ -128,9 +130,50 @@ APT::Periodic::Download-Upgradeable-Packages "0";
 APT::Periodic::Unattended-Upgrade "0";
 Unattended-Upgrade::Automatic-Reboot "false";
 EOF
+echo 'Configuring log limits, time synchronization and terminal defaults'
+install -d /etc/systemd/journald.conf.d /etc/systemd/timesyncd.conf.d \
+  /etc/systemd/coredump.conf.d /etc/systemd/system.conf.d /etc/security/limits.d
+cat > /etc/systemd/journald.conf.d/99-customizer.conf <<'EOF'
+[Journal]
+Storage=persistent
+SystemMaxUse=500M
+SystemKeepFree=1G
+RuntimeMaxUse=128M
+MaxRetentionSec=30day
+EOF
+cat > /etc/systemd/timesyncd.conf.d/99-customizer.conf <<'EOF'
+[Time]
+NTP=ntp.aliyun.com ntp.tencent.com
+FallbackNTP=ntp.ubuntu.com
+EOF
+cat > /etc/tmux.conf <<'EOF'
+set -g mouse on
+set -g history-limit 50000
+set -g base-index 1
+setw -g pane-base-index 1
+set -g renumber-windows on
+set -g status-right '#H | %Y-%m-%d %H:%M'
+EOF
+cat > /etc/systemd/coredump.conf.d/99-customizer.conf <<'EOF'
+[Coredump]
+Storage=none
+ProcessSizeMax=0
+EOF
+cat > /etc/systemd/system.conf.d/99-customizer-core.conf <<'EOF'
+[Manager]
+DefaultLimitCORE=0:0
+EOF
+cat > /etc/security/limits.d/99-customizer-core.conf <<'EOF'
+* soft core 0
+* hard core 0
+root soft core 0
+root hard core 0
+EOF
+install -m 0755 /tmp/customizer/server-info.sh /usr/local/bin/server-info
+install -m 0755 /tmp/customizer/server-update.sh /usr/local/bin/server-update
 echo 'Configuring enabled services and automatic update policy'
 systemctl disable ssh.socket
-systemctl enable ssh docker containerd tailscaled systemd-networkd systemd-resolved systemd-timesyncd apt-daily.timer
+systemctl enable ssh docker containerd tailscaled systemd-networkd systemd-resolved systemd-timesyncd apt-daily.timer fstrim.timer
 systemctl mask apt-daily-upgrade.timer apt-daily-upgrade.service
 for unit in iperf3.service vnstat.service smartmontools.service sysstat.service sysstat-collect.timer sysstat-summary.timer nftables.service; do
   systemctl disable "$unit" 2>/dev/null || true

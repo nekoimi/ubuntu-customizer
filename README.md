@@ -55,6 +55,7 @@ NO_PROXY='localhost,127.0.0.1,::1,.aliyun.com,.tsinghua.edu.cn'
 - Alpine 发布信息、minirootfs 和 APK 软件包统一使用阿里云国内镜像 `https://mirrors.aliyun.com/alpine`。
 - 采用阿里云 Ubuntu / Docker APT 源、清华 pip / uv 源；SSH 使用 22 端口和 `ubuntu` 密码登录，网络使用 DHCP，主机名由安装器自动生成。
 - SSH 登录成功后直接进入命令行，不显示 MOTD、系统状态、Ubuntu Pro 广告、更新或重启提醒及上次登录信息。
+- 预置 journald 日志限额、上海时区与国内 NTP、每周 `fstrim`、SSH 保活、tmux 操作体验和 core dump 限制；提供手动执行的 `server-info` 与 `server-update` 命令。
 - 采用 2 GiB 交换文件，`ubuntu` 通过 sudo 管理 Docker；上海时区、默认英文环境并预留中文 locale，安装结束后手动重启。
 - 保留系统后台更新检查，关闭 SSH 登录欢迎信息和更新提示，关闭自动安装及自动重启，由用户手动维护补丁。
 - 安装结束后的第一次启动即可使用，不依赖首次开机初始化脚本。

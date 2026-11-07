@@ -20,7 +20,7 @@ grep -q '(ALL : ALL) ALL' <<< "$sudo_policy"
 if grep -q NOPASSWD <<< "$sudo_policy"; then exit 1; fi
 if dpkg-query -W -f='${db:Status-Status}' snapd 2>/dev/null | grep -qx installed; then exit 1; fi
 [[ $(apt-cache policy snapd | awk '/Candidate:/ {print $2}') == '(none)' ]]
-for cmd in gcc g++ make cmake python3 pip3 uv uvx docker tailscale dig ss tcpdump; do command -v "$cmd" >/dev/null; done
+for cmd in gcc g++ make cmake python3 pip3 uv uvx docker tailscale dig ss tcpdump tmux server-info server-update; do command -v "$cmd" >/dev/null; done
 uv --version
 uvx --version
 docker --version
@@ -32,7 +32,7 @@ rm -rf /tmp/check-venv
 runuser -u ubuntu -- uv venv --offline --python /usr/bin/python3 /tmp/check-uv-venv
 rm -rf /tmp/check-uv-venv
 echo 'Checking service enablement and automatic update policy'
-for unit in ssh docker containerd tailscaled apt-daily.timer; do
+for unit in ssh docker containerd tailscaled systemd-timesyncd apt-daily.timer fstrim.timer; do
     systemctl is-enabled "$unit" >/dev/null
 done
 [[ $(systemctl is-enabled apt-daily-upgrade.timer) == masked ]]
@@ -50,6 +50,8 @@ grep -qx 'passwordauthentication yes' <<< "$sshd_config"
 grep -qx 'printmotd no' <<< "$sshd_config"
 grep -qx 'printlastlog no' <<< "$sshd_config"
 grep -qx 'banner none' <<< "$sshd_config"
+grep -qx 'clientaliveinterval 60' <<< "$sshd_config"
+grep -qx 'clientalivecountmax 3' <<< "$sshd_config"
 echo 'Checking APT configuration'
 apt_configuration=$(apt-config dump)
 grep -q 'APT::Periodic::Unattended-Upgrade "0"' <<< "$apt_configuration"
@@ -60,4 +62,22 @@ grep -q '^Signed-By: /etc/apt/keyrings/tailscale.gpg$' /etc/apt/sources.list.d/t
 [[ $(stat -c %s /swapfile) == 2147483648 && $(stat -c %a /swapfile) == 600 ]]
 kernels=(/boot/vmlinuz-*)
 [[ -s ${kernels[0]} ]]
+echo 'Checking maintenance presets'
+grep -qx 'Storage=persistent' /etc/systemd/journald.conf.d/99-customizer.conf
+grep -qx 'SystemMaxUse=500M' /etc/systemd/journald.conf.d/99-customizer.conf
+grep -qx 'RuntimeMaxUse=128M' /etc/systemd/journald.conf.d/99-customizer.conf
+grep -qx 'SystemKeepFree=1G' /etc/systemd/journald.conf.d/99-customizer.conf
+grep -qx 'MaxRetentionSec=30day' /etc/systemd/journald.conf.d/99-customizer.conf
+grep -qx 'NTP=ntp.aliyun.com ntp.tencent.com' /etc/systemd/timesyncd.conf.d/99-customizer.conf
+grep -qx 'FallbackNTP=ntp.ubuntu.com' /etc/systemd/timesyncd.conf.d/99-customizer.conf
+grep -qx 'Storage=none' /etc/systemd/coredump.conf.d/99-customizer.conf
+grep -qx 'ProcessSizeMax=0' /etc/systemd/coredump.conf.d/99-customizer.conf
+grep -qx 'DefaultLimitCORE=0:0' /etc/systemd/system.conf.d/99-customizer-core.conf
+grep -qx '\* hard core 0' /etc/security/limits.d/99-customizer-core.conf
+server-info --help
+server-update --help
+tmux -L customizer-check -f /etc/tmux.conf new-session -d -s check
+tmux -L customizer-check show-options -gv mouse
+[[ $(tmux -L customizer-check show-options -gv history-limit) == 50000 ]]
+tmux -L customizer-check kill-server
 echo 'Ubuntu guest validation passed'
