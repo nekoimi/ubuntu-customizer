@@ -34,6 +34,7 @@ class ReleaseDownload(unittest.TestCase):
     def test_latest_stable_asset_is_verified_and_recorded(self):
         build = builder.Build.__new__(builder.Build)
         build.details = {}
+        build.note = Mock()
         with tempfile.TemporaryDirectory() as folder, \
                 patch.object(builder.urllib.request, "urlopen", return_value=io.BytesIO(json.dumps(self.release()).encode())), \
                 patch.object(builder, "download") as download:
@@ -57,6 +58,7 @@ class ReleaseDownload(unittest.TestCase):
                 release["assets"][0]["digest" if change == "digest" else "browser_download_url"] = "invalid"
             build = builder.Build.__new__(builder.Build)
             build.details = {}
+            build.note = Mock()
             with self.subTest(change=change), \
                     patch.object(builder.urllib.request, "urlopen", return_value=io.BytesIO(json.dumps(release).encode())), \
                     patch.object(builder, "download") as download, self.assertRaises(RuntimeError):

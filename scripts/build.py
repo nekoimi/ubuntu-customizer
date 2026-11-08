@@ -16,9 +16,12 @@ import signal
 import subprocess as sp
 import sys
 import tarfile
+import tempfile
 import threading
 import time
 import urllib.request
+import urllib.error
+import urllib.parse
 
 if __package__:
     from .build_env import configure_proxy, password_input, proxy_secrets, ntfy_settings, NTFY_KEYS
@@ -73,6 +76,41 @@ def download(url, destination, expected=None):
         temporary.unlink()
         raise RuntimeError("Downloaded file SHA256 mismatch: " + destination.name)
     temporary.replace(destination)
+
+
+def http_error_summary(error):
+    # Never use str(HTTPError): the reason, URL or headers may expose proxy
+    # credentials or signed redirect query strings. Only report status + host.
+    try:
+        host = urllib.parse.urlsplit(error.url).hostname or "remote server"
+        if not re.fullmatch(r"[A-Za-z0-9.:-]+", host):
+            host = "remote server"
+    except ValueError:
+        host = "remote server"
+    message = f"HTTP {error.code} from {host}"
+    if error.code in (403, 429) and error.headers and error.headers.get("X-RateLimit-Remaining") == "0":
+        message += "; GitHub API rate limit exhausted; wait for reset or change proxy egress"
+    elif error.code == 407:
+        message += "; proxy authentication required"
+    elif error.code == 403:
+        message += "; request forbidden; check GitHub limits and proxy policy"
+    elif error.code == 404:
+        message += "; resource not found; check the release/asset and proxy response"
+    elif error.code == 429:
+        message += "; too many requests; retry later"
+    elif error.code in (502, 503, 504):
+        message += "; gateway or upstream unavailable; check proxy/connectivity and retry"
+    return message
+
+
+def proxy_summary(values):
+    lines = ["Build proxy: HTTP=" + ("configured" if values.get("http_proxy") else "unset")
+             + "; HTTPS=" + ("configured" if values.get("https_proxy") else "unset")]
+    for host in ("api.github.com", "github.com", "release-assets.githubusercontent.com"):
+        bypass = urllib.request.proxy_bypass_environment(host, {"no": values.get("no_proxy", "")})
+        route = "direct (NO_PROXY match)" if bypass else "proxy" if values.get("https_proxy") else "direct (HTTPS proxy unset)"
+        lines.append(f"Configured route for {host}: {route}")
+    return lines
 
 
 def check_host(config):
@@ -261,6 +299,8 @@ class Build:
         self.note("Build ID: " + self.id)
         self.note("Detailed log: " + str(self.work / "tools.log"))
         self.note("Preflight passed; private mount/PID/UTS/IPC namespaces; file-backed disks only")
+        for line in proxy_summary(self.proxy_env):
+            self.note(line)
         self.checks["preflight"] = "passed"
 
     def ubuntu(self):
@@ -344,6 +384,7 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
     def uv(self, destination):
         version = self.config["uv_version"]
         if version == "latest":
+            self.note("Querying latest uv release: api.github.com")
             req = urllib.request.Request("https://api.github.com/repos/astral-sh/uv/releases/latest", headers={"User-Agent": "ubuntu-customizer"})
             with urllib.request.urlopen(req, timeout=60) as response:
                 version = json.load(response)["tag_name"]
@@ -353,10 +394,12 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
         base = "https://github.com/astral-sh/uv/releases/download/" + version + "/"
         archive = self.work / name
         checksum = self.work / (name + ".sha256")
+        self.note("Downloading uv checksum: github.com (redirects allowed)")
         download(base + name + ".sha256", checksum)
         sha = checksum.read_text().split()[0]
         if not re.fullmatch(r"[a-f0-9]{64}", sha):
             raise RuntimeError("Invalid uv checksum")
+        self.note("Downloading and verifying uv archive: github.com (redirects allowed)")
         download(base + name, archive, sha)
         with tarfile.open(archive) as package:
             for binary in ("uv", "uvx"):
@@ -365,6 +408,7 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
         self.details["uv"] = {"version": version, "archive_sha256": sha}
 
     def v2raya(self, destination):
+        self.note("Querying latest stable v2rayA release: api.github.com")
         request = urllib.request.Request("https://api.github.com/repos/v2rayA/v2rayA/releases/latest",
                                          headers={"User-Agent": "ubuntu-customizer"})
         with urllib.request.urlopen(request, timeout=60) as response:
@@ -381,6 +425,7 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
         if not re.fullmatch(r"sha256:[a-f0-9]{64}", checksum):
             raise RuntimeError("Missing SHA256 digest for v2rayA Debian package")
         sha = checksum.removeprefix("sha256:")
+        self.note("Downloading and verifying v2rayA Debian package: github.com (redirects allowed)")
         download(url, destination / "v2raya.deb", sha)
         self.details["v2raya"] = {"version": tag[1:], "package": name, "url": url, "sha256": sha}
         (destination / "v2raya-release.json").write_text(json.dumps(self.details["v2raya"], indent=2) + "\n")
@@ -581,13 +626,43 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
             os.chown(self.stage, int(os.environ["SUDO_UID"]), int(os.environ["SUDO_GID"]))
 
 
+def check_downloads(config):
+    """Exercise real download paths without root, mounts, images or passwords."""
+    try:
+        values = configure_proxy()
+        for line in proxy_summary(values):
+            print(line, flush=True)
+        with tempfile.TemporaryDirectory(prefix="ubuntu-customizer-downloads-") as folder:
+            build = Build.__new__(Build)
+            build.config = config
+            build.work = Path(folder)
+            build.logs = []
+            build.details = {}
+            tools = build.work / "tools"
+            tools.mkdir()
+            with build.progress("Downloading and verifying uv from GitHub"):
+                build.uv(tools)
+            with build.progress("Downloading and verifying latest stable v2rayA from GitHub"):
+                build.v2raya(tools)
+        print("GitHub downloads and checksums passed. Temporary downloads removed; no images, mounts or notifications created.")
+        return 0
+    except Exception as error:
+        detail = http_error_summary(error) if isinstance(error, urllib.error.HTTPError) else type(error).__name__
+        print("Download check failed: " + detail, file=sys.stderr)
+        return 1
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=REPO / "config/build.json")
     parser.add_argument("--build-id", default=dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
     parser.add_argument("--reports", type=Path, default=REPO / "reports")
-    parser.add_argument("--check", action="store_true", help="Read-only host checks; no password, sudo or build needed")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true", help="Read-only host checks; no password, sudo or build needed")
+    mode.add_argument("--check-downloads", action="store_true", help="Check GitHub downloads using build proxy settings; no image build")
     args = parser.parse_args()
+    if args.check_downloads:
+        return check_downloads(json.loads(args.config.read_text()))
     if args.check:
         try:
             result = check_host(json.loads(args.config.read_text()))
@@ -614,6 +689,8 @@ def main():
         return 0
     except Exception as error:
         reason = ": " + str(error) if isinstance(error, (ValueError, RuntimeError, FileExistsError)) else ""
+        if isinstance(error, urllib.error.HTTPError):
+            reason = ": " + http_error_summary(error)
         if isinstance(error, sp.CalledProcessError):
             # Never print str(error): it includes all arguments and possibly private input.
             tool = Path(str(error.cmd[0])).name if isinstance(error.cmd, (list, tuple)) and error.cmd else "subprocess"
@@ -621,7 +698,7 @@ def main():
         log_path = str(build.work / "tools.log") if build is not None else "local work/tools.log"
         print("Build failed: " + type(error).__name__ + reason + "; inspect " + log_path, file=sys.stderr)
         if build is not None:
-            build.note("Build failed: " + type(error).__name__)
+            build.note("Build failed: " + type(error).__name__ + (reason if isinstance(error, urllib.error.HTTPError) else ""))
             build.report("failed", error)
         return 1
     finally:

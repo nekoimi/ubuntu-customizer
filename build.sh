@@ -8,6 +8,7 @@ Usage: bash build.sh [command] [options]
 
   setup                 Install build dependencies (uses sudo if needed)
   check [--config FILE] Check host tools, resources and output paths; no writes
+  check-downloads       Check GitHub downloads with build proxy settings; no ISO build
   test                  Run safety tests and script static checks
   build [options]       Build the ISO (default command; uses sudo if needed)
   help                  Show this help
@@ -40,6 +41,7 @@ case "$command" in
         as_root bash "$repo/scripts/setup-host.sh"
         ;;
     check) exec python3 "$repo/scripts/build.py" --check "$@" ;;
+    check-downloads) exec python3 "$repo/scripts/build.py" --check-downloads "$@" ;;
     test)
         (($# == 0)) || { usage >&2; exit 2; }
         exec bash "$repo/scripts/check.sh"
