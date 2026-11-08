@@ -15,6 +15,18 @@ export DEBIAN_FRONTEND=readline
 echo 'Refreshing indexes; APT will ask before installing available upgrades.'
 echo 'Docker/Tailscale updates may restart services and interrupt workloads or remote connections.'
 apt-get update
+prompt_style=''
+prompt_reset=''
+if [[ -t 1 && ${TERM:-} != dumb && ! ${NO_COLOR+x} ]]; then
+    prompt_style=$'\033[1;33m'
+    prompt_reset=$'\033[0m'
+fi
+printf '\n\n%s%s\n' "$prompt_style" '======================================================================'
+printf '%s\n' '[INTERACTIVE STEP] REVIEW SYSTEM UPGRADES'
+printf '%s\n' 'APT will list upgrades and ask for confirmation if changes are available.'
+printf '%s\n' 'Read the package summary, then answer at the APT prompt below.'
+printf '%s\n' 'Docker/Tailscale upgrades may restart services and interrupt connections.'
+printf '%s%s\n\n' '======================================================================' "$prompt_reset"
 apt-get upgrade
 if [[ -f /var/run/reboot-required ]]; then
     cat /var/run/reboot-required

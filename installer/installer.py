@@ -148,13 +148,35 @@ def discover(raw_bytes):
     return eligible_disks(tree, excluded, occupied, raw_bytes, disk_identity)
 
 
+def highlight(text, *, color="33"):
+    # Keep redirected logs and basic terminals readable without escape codes.
+    if sys.stdout.isatty() and os.environ.get("TERM") != "dumb" and "NO_COLOR" not in os.environ:
+        return f"\033[1;{color}m{text}\033[0m"
+    return text
+
+
+def interaction_panel(title, lines, *, color="33"):
+    border = "=" * 70
+    print("\n\n" + highlight(border, color=color))
+    print(highlight(title, color=color))
+    print(highlight(border, color=color))
+    for line in lines:
+        print(line)
+    print(highlight(border, color=color), flush=True)
+
+
 def select_disk(disks, timeout=30):
     if not disks:
         raise Refusal("No eligible disk. USB, removable, busy, read-only and incompatible disks are excluded.")
+    interaction_panel("[ACTION REQUIRED 1/2] SELECT INSTALLATION DISK", [
+        "No target disk has been written.",
+        f"After {timeout}s with no input, the largest eligible disk is selected.",
+        "Selection NEVER authorizes erasure; a separate confirmation follows.",
+    ])
     for index, disk in enumerate(disks, 1):
-        print(f"{index}. {disk['path']}  {disk.get('model') or ''}  {int(disk['size']) / 1024**3:.1f} GiB  serial={disk.get('serial') or '-'}" + ("  [DEFAULT]" if index == 1 else ""))
-    print("Select number + Enter; Enter accepts largest disk; q cancels.")
-    print("Any key cancels the 30-second selection timer. This timer NEVER confirms erasure.")
+        print(f"  {index}. {disk['path']}  {disk.get('model') or ''}  {int(disk['size']) / 1024**3:.1f} GiB  serial={disk.get('serial') or '-'}" + ("  [DEFAULT / LARGEST]" if index == 1 else ""))
+    print(highlight("Enter disk number + Enter | Enter = default | q = cancel"))
+    print("Any key stops the automatic selection timer.\n", flush=True)
     import termios
     import tty
     if not sys.stdin.isatty():
@@ -169,7 +191,7 @@ def select_disk(disks, timeout=30):
         while True:
             remaining = max(0, deadline - time.monotonic()) if active else None
             if active:
-                print(f"\rSelection timeout: {remaining:2.0f}s  > {value}   ", end="", flush=True)
+                print("\r" + highlight(f">>> SELECT DISK [{remaining:2.0f}s to default]: {value}".ljust(70)), end="", flush=True)
             ready, _, _ = select.select([fd], [], [], min(1, remaining) if active else None)
             if not ready:
                 if active and time.monotonic() >= deadline:
@@ -186,20 +208,31 @@ def select_disk(disks, timeout=30):
                     return disks[0]
                 if value.isdigit() and 1 <= int(value) <= len(disks):
                     return disks[int(value) - 1]
-                print("Invalid selection. Enter a disk number; q cancels.")
+                print(highlight("INVALID SELECTION: enter a disk number; q cancels."))
                 value = ""
             elif char in ("\x7f", "\b"):
                 value = value[:-1]
             elif char.isprintable() and len(value) < 20:
                 value += char
-            print(f"\rTimer cancelled. Selection > {value}   ", end="", flush=True)
+            print("\r" + highlight(f">>> SELECT DISK [timer stopped]: {value}".ljust(70)), end="", flush=True)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, previous)
 
 
 def confirm(disk, prompt=input):
-    print(f"\nALL DATA WILL BE LOST on {disk['path']} ({disk.get('model') or ''}; serial={disk.get('serial') or '-'}; {disk['size']} bytes).")
-    if prompt("Type y + Enter to erase this disk and install. No timeout; any other answer cancels: ").lower() != "y":
+    interaction_panel("[ACTION REQUIRED 2/2] CONFIRM DISK ERASURE", [
+        highlight("WARNING: ALL DATA ON THIS DISK WILL BE LOST.", color="31"),
+        "",
+        f"  Target : {disk['path']}",
+        f"  Model  : {disk.get('model') or '-'}",
+        f"  Serial : {disk.get('serial') or '-'}",
+        f"  Size   : {int(disk['size']) / 1024**3:.1f} GiB ({disk['size']} bytes)",
+        "",
+        "WAITING FOR YOUR INPUT - no timeout, no automatic erasure.",
+        "Type y + Enter to erase this disk and install.",
+        "Enter alone or any other answer cancels installation.",
+    ], color="31")
+    if prompt(highlight(">>> CONFIRM ERASURE [y = erase / other = cancel]: ", color="31")).lower() != "y":
         raise Refusal("Erasure not confirmed")
 
 
@@ -288,8 +321,24 @@ def main(*, check_tools_only=False):
         raise Refusal("Target identity changed during write")
     sp.run(["bash", "/usr/local/lib/ubuntu-customizer/finalize.sh", selected["path"], manifest["build_id"]],
            env={**os.environ, "UBUNTU_CUSTOMIZER_WRITE_VERIFIED": "1"}, check=True)
-    print("\nInstallation complete. Remove USB, then reboot manually.")
-    print("Log in as ubuntu; change your password with passwd; authorize Tailscale with sudo tailscale up.")
+    interaction_panel("[SUCCESS] INSTALLATION COMPLETE", [
+        f"  Installed disk : {selected['path']}",
+        f"  Build ID       : {manifest['build_id']}",
+        "",
+        "NEXT STEPS",
+        "  1. Remove the installation USB (or disconnect the ISO in your VM).",
+        "  2. Reboot manually from the Live shell below:",
+        "       reboot",
+        "  3. Log in to the installed Ubuntu system:",
+        "       Username: ubuntu | Password: your preset image password",
+        "  4. Change your login password:",
+        "       passwd",
+        "  5. If needed, authenticate Tailscale and follow its login link:",
+        "       sudo tailscale up",
+        "",
+        "Run passwd and tailscale up AFTER booting into installed Ubuntu.",
+        "The machine will NOT reboot automatically.",
+    ], color="32")
 
 
 if __name__ == "__main__":

@@ -365,7 +365,7 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
         self.checks["alpine_installer_tools"] = "passed"
         console = root / "usr/local/sbin/installer-console"
         console.parent.mkdir(parents=True, exist_ok=True)
-        console.write_text("#!/bin/sh\nexport PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\npython3 /usr/local/lib/ubuntu-customizer/installer.py\necho 'Installer stopped. Manual recovery shell; reboot only after unmounting disks.'\nexec /bin/sh\n")
+        console.write_text("#!/bin/sh\nexport PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\nif python3 /usr/local/lib/ubuntu-customizer/installer.py; then\n  echo 'Live shell: follow the completion steps above; run reboot when ready.'\nelse\n  echo 'Installer stopped. Manual recovery shell; reboot only after unmounting disks.'\nfi\nexec /bin/sh\n")
         console.chmod(0o755)
         (root / "etc/inittab").write_text("::sysinit:/sbin/openrc sysinit\n::wait:/sbin/openrc boot\n::wait:/sbin/openrc default\ntty1::respawn:/usr/local/sbin/installer-console\ntty2::respawn:/bin/sh\n::ctrlaltdel:/sbin/reboot\n::shutdown:/sbin/openrc shutdown\n")
         self.run(["chroot", root, "rc-update", "add", "devfs", "sysinit"])
