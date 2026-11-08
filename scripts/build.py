@@ -286,14 +286,16 @@ class Build:
         tools.mkdir()
         (tools / "build-root").write_text(self.id + "\n")
         shutil.copyfile(REPO / "config/packages.txt", tools / "packages.txt")
-        for name in ("server-info.sh", "server-update.sh"):
+        for name in ("server-info.sh", "server-update.sh", "check-v2raya.py", "proxy-shell.bash", "proxy-check.py"):
             shutil.copyfile(REPO / "scripts" / name, tools / name)
         with self.progress("Downloading and verifying uv from GitHub"):
             self.uv(tools)
+        with self.progress("Downloading and verifying latest stable v2rayA from GitHub"):
+            self.v2raya(tools)
         self.guest(root, (REPO / "scripts/customize.sh").read_text(), {
             "UBUNTU_MIRROR": self.config["ubuntu_mirror"],
             "DOCKER_MIRROR": self.config["docker_mirror"], "PYTHON_INDEX": self.config["python_index"]},
-            label="Installing packages and configuring Ubuntu, Docker and Tailscale")
+            label="Installing packages and configuring Ubuntu, Docker, Tailscale and v2rayA")
         self.run(["chroot", root, "chpasswd", "--encrypted"], input=("ubuntu:" + self.password_hash + "\n").encode())
         root_uuid = self.output(["blkid", "-s", "UUID", "-o", "value", self.loop + "p3"])
         esp_uuid = self.output(["blkid", "-s", "UUID", "-o", "value", self.loop + "p2"])
@@ -301,6 +303,7 @@ class Build:
         self.guest(root, "update-initramfs -u -k all\ngrub-install --target=i386-pc --recheck " + self.loop + "\ngrub-install --target=x86_64-efi --efi-directory=/boot/efi --removable --no-nvram --no-uefi-secure-boot\nupdate-grub\n", label="Generating initramfs and installing BIOS / UEFI bootloaders")
         self.guest(root, (REPO / "scripts/check-guest.sh").read_text(), label="Checking Ubuntu packages and configuration")
         self.checks["ubuntu_packages_and_config"] = "passed"
+        self.details["v2raya"]["core_version"] = self.output(["chroot", root, "v2raya_core", "version"])
         for name in ("packages.txt", "package-origins.txt"):
             shutil.copyfile(root / "var/lib/ubuntu-customizer" / name, self.release / name)
         self.guest(root, """apt-get clean
@@ -345,6 +348,27 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
                 with package.extractfile("uv-x86_64-unknown-linux-gnu/" + binary) as source, (destination / binary).open("wb") as target:
                     shutil.copyfileobj(source, target)
         self.details["uv"] = {"version": version, "archive_sha256": sha}
+
+    def v2raya(self, destination):
+        request = urllib.request.Request("https://api.github.com/repos/v2rayA/v2rayA/releases/latest",
+                                         headers={"User-Agent": "ubuntu-customizer"})
+        with urllib.request.urlopen(request, timeout=60) as response:
+            release = json.load(response)
+        tag = release.get("tag_name", "")
+        if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) or release.get("draft") or release.get("prerelease"):
+            raise RuntimeError("Unexpected v2rayA stable release metadata")
+        name = f"installer_debian_x64_{tag[1:]}.deb"
+        asset = next((item for item in release.get("assets", []) if item.get("name") == name), None)
+        url = f"https://github.com/v2rayA/v2rayA/releases/download/{tag}/{name}"
+        if not asset or asset.get("browser_download_url") != url:
+            raise RuntimeError("Latest v2rayA release has no expected amd64 Debian package")
+        checksum = asset.get("digest", "")
+        if not re.fullmatch(r"sha256:[a-f0-9]{64}", checksum):
+            raise RuntimeError("Missing SHA256 digest for v2rayA Debian package")
+        sha = checksum.removeprefix("sha256:")
+        download(url, destination / "v2raya.deb", sha)
+        self.details["v2raya"] = {"version": tag[1:], "package": name, "url": url, "sha256": sha}
+        (destination / "v2raya-release.json").write_text(json.dumps(self.details["v2raya"], indent=2) + "\n")
 
     def install_alpine_packages(self, root, branch):
         if not re.fullmatch(r"v3\.[0-9]+", branch):
@@ -477,7 +501,7 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
         self.details["input_sha256"] = {str(path.relative_to(REPO)): digest(path)
                                          for directory in ("scripts", "installer", "config")
                                          for path in sorted((REPO / directory).glob("*"))
-                                         if path.is_file() and path.suffix in (".py", ".sh", ".json", ".txt")}
+                                         if path.is_file() and path.suffix in (".py", ".sh", ".bash", ".json", ".txt")}
         self.details["input_sha256"]["build.sh"] = digest(REPO / "build.sh")
         manifest = json.dumps(self.details, indent=2) + "\n"
         (payload / "manifest.json").write_text(manifest)

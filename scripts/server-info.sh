@@ -28,7 +28,7 @@ section 'Disks and filesystems'
 inspect lsblk --output NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS
 df -hT -x tmpfs -x devtmpfs
 section 'Service state'
-for unit in ssh ufw docker containerd tailscaled systemd-timesyncd; do
+for unit in ssh ufw docker containerd tailscaled v2raya systemd-timesyncd; do
     state=$(systemctl is-active "$unit" 2>/dev/null) || true
     printf '%s: %s\n' "$unit" "${state:-unavailable}"
 done
@@ -43,6 +43,12 @@ inspect docker --version
 inspect docker info --format 'Server={{.ServerVersion}} Containers={{.Containers}} Running={{.ContainersRunning}} Images={{.Images}}'
 section 'Tailscale'
 inspect tailscale status
+section 'v2rayA'
+inspect v2raya --version
+echo 'Web UI: http://<server-ip>:2017 (create an account, import and connect a node)'
+echo 'Docker HTTP/HTTPS proxy: http://127.0.0.1:20171; no node means external pulls fail.'
+echo 'Bash helpers: proxy-on / proxy-off / proxy-status. Run proxy-check for connectivity checks.'
+inspect ss -lnt '( sport = :2017 or sport = :20170 or sport = :20171 or sport = :20172 )'
 section 'Maintenance timers'
 inspect systemctl list-timers --all --no-pager fstrim.timer apt-daily.timer
 section 'Reboot status'

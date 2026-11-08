@@ -48,6 +48,7 @@ ufw() {
         calls = [line for line in result.stderr.splitlines() if line.startswith("UFW:")]
         self.assertEqual(calls, ["UFW: default deny incoming", "UFW: default allow outgoing",
                                  "UFW: default deny routed", "UFW: allow 22/tcp",
+                                 "UFW: allow 2017/tcp",
                                  "UFW: --force enable", "UFW: status verbose"])
 
     def test_ssh_rule_failure_does_not_enable_firewall(self):

@@ -62,8 +62,34 @@ echo 'Installing Docker and Tailscale packages'
 apt-get install -y --no-install-recommends \
   docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin tailscale
 install -d /etc/docker /etc/uv
+echo 'Installing verified v2rayA package with its bundled core and rule data'
+apt-get install -y --no-install-recommends /tmp/customizer/v2raya.deb
+install -d -m 0700 /etc/v2raya
+cat > /etc/default/v2raya <<'EOF'
+V2RAYA_ADDRESS=0.0.0.0:2017
+V2RAYA_CONFIG=/etc/v2raya
+V2RAYA_V2RAY_BIN=/usr/bin/v2raya_core
+V2RAYA_V2RAY_ASSETSDIR=/usr/share/v2raya
+V2RAYA_LITE=true
+V2RAYA_LOG_FILE=
+V2RAYA_LOG_DISABLE_COLOR=true
+EOF
 cat > /etc/docker/daemon.json <<'EOF'
-{"log-driver":"json-file","log-opts":{"max-size":"10m","max-file":"3"}}
+{
+  "log-driver": "json-file",
+  "log-opts": {"max-size": "10m", "max-file": "3"},
+  "proxies": {
+    "http-proxy": "http://127.0.0.1:20171",
+    "https-proxy": "http://127.0.0.1:20171",
+    "no-proxy": "localhost,127.0.0.0/8,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.localhost,.local"
+  }
+}
+EOF
+install -d /etc/systemd/system/docker.service.d
+cat > /etc/systemd/system/docker.service.d/20-v2raya.conf <<'EOF'
+[Unit]
+Wants=v2raya.service
+After=v2raya.service
 EOF
 printf '[global]\nindex-url = %s\n' "$PYTHON_INDEX" > /etc/pip.conf
 cat > /etc/uv/uv.toml <<EOF
@@ -173,6 +199,9 @@ root hard core 0
 EOF
 install -m 0755 /tmp/customizer/server-info.sh /usr/local/bin/server-info
 install -m 0755 /tmp/customizer/server-update.sh /usr/local/bin/server-update
+install -m 0755 /tmp/customizer/proxy-check.py /usr/local/bin/proxy-check
+install -m 0644 /tmp/customizer/proxy-shell.bash /etc/profile.d/customizer-proxy.sh
+printf '\nsource /etc/profile.d/customizer-proxy.sh\n' >> /etc/bash.bashrc
 echo 'Configuring and testing UFW in an isolated network namespace'
 original_netns=$(readlink /proc/self/ns/net)
 UBUNTU_CUSTOMIZER_ORIGINAL_NETNS="$original_netns" unshare --net -- bash -se <<'FIREWALL_CONFIG'
@@ -186,6 +215,7 @@ ufw default deny incoming
 ufw default allow outgoing
 ufw default deny routed
 ufw allow 22/tcp
+ufw allow 2017/tcp
 ufw --force enable
 firewall_status=$(ufw status verbose)
 printf '%s\n' "$firewall_status"
@@ -194,7 +224,7 @@ grep -q '^Default: deny (incoming), allow (outgoing), deny (routed)' <<< "$firew
 FIREWALL_CONFIG
 echo 'Configuring enabled services and automatic update policy'
 systemctl disable ssh.socket
-systemctl enable ssh ufw docker containerd tailscaled systemd-networkd systemd-resolved systemd-timesyncd apt-daily.timer fstrim.timer
+systemctl enable ssh ufw docker containerd tailscaled v2raya systemd-networkd systemd-resolved systemd-timesyncd apt-daily.timer fstrim.timer
 systemctl mask apt-daily-upgrade.timer apt-daily-upgrade.service
 for unit in iperf3.service vnstat.service smartmontools.service sysstat.service sysstat-collect.timer sysstat-summary.timer nftables.service; do
   systemctl disable "$unit" 2>/dev/null || true
@@ -215,6 +245,7 @@ dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
 chmod 600 /swapfile
 mkswap /swapfile
 install -d /var/lib/ubuntu-customizer
+install -m 0644 /tmp/customizer/v2raya-release.json /var/lib/ubuntu-customizer/v2raya-release.json
 dpkg-query -W -f='${Package}\t${Version}\n' | sort > /var/lib/ubuntu-customizer/packages.txt
 apt-cache policy docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin tailscale \
   > /var/lib/ubuntu-customizer/package-origins.txt

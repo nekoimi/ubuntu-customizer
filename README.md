@@ -22,7 +22,7 @@ bash build.sh build
 
 构建入口使用独立的挂载、PID、UTS 和 IPC 命名空间，隔离镜像内包脚本与宿主进程，`/run` 使用独立 tmpfs；下载网络仍与宿主共用。这是以 root 执行的构建流程，并不等同于虚拟机级隔离；建议使用专用构建机器或虚拟机。
 
-uv 从 GitHub API / Releases 下载，Tailscale 使用官方 `pkgs.tailscale.com` 源；这些站点访问较慢时，可在 `config/local.env` 配置 v2rayA 的 **HTTP 代理**（地址和端口按实际部署填写）：
+uv 和 v2rayA 从 GitHub API / Releases 下载，Tailscale 使用官方 `pkgs.tailscale.com` 源；这些站点访问较慢时，可在 `config/local.env` 配置现有 v2rayA 的 **HTTP 代理**（地址和端口按实际部署填写）：
 
 ```bash
 HTTP_PROXY='http://192.168.1.10:20171'
@@ -30,7 +30,7 @@ HTTPS_PROXY='http://192.168.1.10:20171'
 NO_PROXY='localhost,127.0.0.1,::1,.aliyun.com,.tsinghua.edu.cn'
 ```
 
-代理对 `setup` 和 `build` 生效，覆盖宿主下载、debootstrap、镜像内 APT / curl 和 Alpine APK；不会写入交付系统。Ubuntu / Docker / Alpine 国内源按 `NO_PROXY` 直连。留空代理地址即可直连；具体规则见 [构建代理说明](docs/构建与运行.md#构建代理可选)。
+此处的代理地址与凭据仅对 `setup` 和 `build` 生效，覆盖宿主下载、debootstrap、镜像内 APT / curl 和 Alpine APK，不会写入交付系统。Ubuntu / Docker / Alpine 国内源按 `NO_PROXY` 直连。交付系统另行预置本机 v2rayA 和 Docker 代理，与构建代理独立；具体规则见 [构建代理说明](docs/构建与运行.md#构建代理可选)。
 
 详细设计见 [Ubuntu Server 定制镜像与整盘安装方案](docs/Ubuntu-Server-定制镜像方案.md)。
 
@@ -53,12 +53,14 @@ NO_PROXY='localhost,127.0.0.1,::1,.aliyun.com,.tsinghua.edu.cn'
 - 不预装 Node.js、Java、Go、Rust，以及数据库与 Web 服务。
 - 预装 Docker Engine、CLI、containerd、Buildx 与 Compose 插件，使用构建时国内 Docker APT 仓库可用的最新兼容稳定版本，并记录实际版本。
 - 预装 Tailscale，`tailscaled` 开机自启；镜像保持未认证状态，安装后由用户执行 `sudo tailscale up` 手动认证，后续重启沿用本机认证状态。
+- 预装构建时最新稳定版 v2rayA 官方 Debian 包（含代理核心和规则数据），开机自启；访问 `http://服务器IP:2017` 创建管理账号、导入并连接节点后，Docker 即可经预置的 `127.0.0.1:20171` HTTP 代理拉取镜像。无节点时外网拉取会失败；不预置节点、订阅或 Web 账号，不启用透明代理及 DNS 接管。详见 [v2rayA 与 Docker 代理](docs/构建与运行.md#v2raya-与-docker-代理)。
+- 提供 Bash 终端代理开关 `proxy-on` / `proxy-off`、环境状态 `proxy-status` 和连通检查 `proxy-check`；新终端默认不启用代理，Docker 保持独立配置。
 - Ubuntu APT 与 Docker 的 APT 安装仓库均使用国内镜像源，并在安装后保留；不配置 Docker 镜像加速地址。
 - Alpine 发布信息、minirootfs 和 APK 软件包统一使用阿里云国内镜像 `https://mirrors.aliyun.com/alpine`。
 - 采用阿里云 Ubuntu / Docker APT 源、清华 pip / uv 源；SSH 使用 22 端口和 `ubuntu` 密码登录，网络使用 DHCP，主机名由安装器自动生成。
 - SSH 登录成功后直接进入命令行，不显示 MOTD、系统状态、Ubuntu Pro 广告、更新或重启提醒及上次登录信息。
 - 预置 journald 日志限额、上海时区与国内 NTP、每周 `fstrim`、SSH 保活、tmux 操作体验和 core dump 限制；提供手动执行的 `server-info` 与 `server-update` 命令。
-- 预装并启用 UFW，IPv4 / IPv6 默认拒绝宿主入站、允许出站，预先放行 SSH TCP 22；Docker 发布端口需单独管理，不能依赖 UFW 普通入站规则限制。
+- 预装并启用 UFW，IPv4 / IPv6 默认拒绝宿主入站、允许出站，预先放行 SSH TCP 22 和 v2rayA Web TCP 2017；Docker 发布端口需单独管理，不能依赖 UFW 普通入站规则限制。
 - 安装器先显示 ASCII Logo 和欢迎页，等待输入 `y` 回车后才开始镜像校验及选盘；交互使用独立提示框和步骤编号，黄色选盘倒计时、红色清盘确认；无颜色终端仍显示完整文字提示。
 - 采用 2 GiB 交换文件，`ubuntu` 通过 sudo 管理 Docker；上海时区、默认英文环境并预留中文 locale，安装结束后手动重启。
 - 保留系统后台更新检查，关闭 SSH 登录欢迎信息和更新提示，关闭自动安装及自动重启，由用户手动维护补丁。
