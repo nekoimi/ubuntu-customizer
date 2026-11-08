@@ -68,12 +68,14 @@ class ProxyConfiguration(unittest.TestCase):
         self.assertEqual(list(Path(self.folder.name).iterdir()), [])
 
     def test_setup_launcher_forwards_proxy_without_password_or_secret_arguments(self):
-        with patch.dict(os.environ, {"UBUNTU_INITIAL_PASSWORD": "private-password"}, clear=True), \
+        with patch.dict(os.environ, {"UBUNTU_INITIAL_PASSWORD": "private-password", "NTFY_TOKEN": "private-token",
+                                     "NTFY_URL": "https://private.test", "NTFY_TOPIC": "servers"}, clear=True), \
                 patch.object(build_env.sys, "argv", ["build_env.py", "--exec", "apt-get", "update"]), \
                 patch.object(build_env, "configure_proxy", side_effect=lambda: os.environ.update(http_proxy="http://proxy:20171")), \
                 patch.object(build_env.os, "execvp") as execute:
             build_env.main()
             self.assertNotIn("UBUNTU_INITIAL_PASSWORD", os.environ)
+            self.assertTrue(all(key not in os.environ for key in build_env.NTFY_KEYS))
             self.assertEqual(os.environ["http_proxy"], "http://proxy:20171")
             execute.assert_called_once_with("apt-get", ["apt-get", "update"])
 
@@ -86,17 +88,18 @@ class ProxyConfiguration(unittest.TestCase):
         build.secret = "initial-password"
         build.password_hash = "$6$hash"
         build.proxy_env = {"https_proxy": "http://proxy-user:p%40ssword@proxy:20171"}
+        build.ntfy_config = {"url": "https://ntfy.private.test", "topic": "private-topic", "token": "private-ntfy-token"}
         build.work = Path(self.folder.name) / "work"
         build.release = Path(self.folder.name) / "release"
         build.stage = Path(self.folder.name) / "reports"
         build.work.mkdir()
         build.release.mkdir()
-        raw = "http://proxy-user:p%40ssword@proxy:20171 proxy-user p@ssword p%40ssword initial-password $6$hash"
+        raw = "http://proxy-user:p%40ssword@proxy:20171 proxy-user p@ssword p%40ssword initial-password $6$hash " + " ".join(build.ntfy_config.values())
         (build.work / "tools.log").write_text(raw)
         with patch.dict(os.environ, {}, clear=True):
             build.report("failed")
         log = (build.release / "logs/tools.log").read_text()
-        self.assertEqual(log, " ".join(["<redacted>"] * 6))
+        self.assertEqual(log, " ".join(["<redacted>"] * 9))
         self.assertNotIn("proxy", (build.stage / "build.log").read_text())
 
 

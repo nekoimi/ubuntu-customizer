@@ -93,6 +93,16 @@ grep -qx '\* hard core 0' /etc/security/limits.d/99-customizer-core.conf
 server-info --help
 server-update --help
 proxy-check --help
+ntfy-ip-notify --check-config
+if [[ -f /etc/ubuntu-customizer/ntfy.json ]]; then
+    [[ $(stat -c '%u:%a' /etc/ubuntu-customizer) == 0:700 ]]
+    [[ $(stat -c '%u:%a' /etc/ubuntu-customizer/ntfy.json) == 0:600 ]]
+    systemctl is-enabled ubuntu-ip-notify.timer >/dev/null
+else
+    [[ $(systemctl is-enabled ubuntu-ip-notify.timer) == disabled ]]
+fi
+grep -qx 'RuntimeDirectoryPreserve=yes' /etc/systemd/system/ubuntu-ip-notify.service
+grep -qx 'OnUnitInactiveSec=30s' /etc/systemd/system/ubuntu-ip-notify.timer
 runuser -u ubuntu -- bash -ic 'declare -F proxy-on proxy-off proxy-status >/dev/null'
 echo 'Checking shell proxy helpers without network requests'
 runuser -u ubuntu -- bash --noprofile --norc -se <<'PROXY_CHECK'

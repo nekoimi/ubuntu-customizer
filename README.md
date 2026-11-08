@@ -55,6 +55,7 @@ NO_PROXY='localhost,127.0.0.1,::1,.aliyun.com,.tsinghua.edu.cn'
 - 预装 Tailscale，`tailscaled` 开机自启；镜像保持未认证状态，安装后由用户执行 `sudo tailscale up` 手动认证，后续重启沿用本机认证状态。
 - 预装构建时最新稳定版 v2rayA 官方 Debian 包（含代理核心和规则数据），开机自启；访问 `http://服务器IP:2017` 创建管理账号、导入并连接节点后，Docker 即可经预置的 `127.0.0.1:20171` HTTP 代理拉取镜像。无节点时外网拉取会失败；不预置节点、订阅或 Web 账号，不启用透明代理及 DNS 接管。详见 [v2rayA 与 Docker 代理](docs/构建与运行.md#v2raya-与-docker-代理)。
 - 提供 Bash 终端代理开关 `proxy-on` / `proxy-off`、环境状态 `proxy-status` 和连通检查 `proxy-check`；新终端默认不启用代理，Docker 保持独立配置。
+- 可在 `config/local.env` 填写 `NTFY_URL`、`NTFY_TOPIC`、`NTFY_TOKEN`，预置开机和内网 IPv4 变化通知，内容包含主机名、网卡地址和 SSH 命令；发送失败自动重试，不阻塞启动。三项留空则禁用。Token 会进入私人 ISO，配置与日志规则见 [ntfy 通知](docs/构建与运行.md#ntfy-内网-ip-通知)。
 - Ubuntu APT 与 Docker 的 APT 安装仓库均使用国内镜像源，并在安装后保留；不配置 Docker 镜像加速地址。
 - Alpine 发布信息、minirootfs 和 APK 软件包统一使用阿里云国内镜像 `https://mirrors.aliyun.com/alpine`。
 - 采用阿里云 Ubuntu / Docker APT 源、清华 pip / uv 源；SSH 使用 22 端口和 `ubuntu` 密码登录，网络使用 DHCP，主机名由安装器自动生成。

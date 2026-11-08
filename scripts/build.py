@@ -21,11 +21,11 @@ import time
 import urllib.request
 
 if __package__:
-    from .build_env import configure_proxy, password_input, proxy_secrets
+    from .build_env import configure_proxy, password_input, proxy_secrets, ntfy_settings, NTFY_KEYS
 else:
     # Direct execution and importlib-based safety tests use different search paths.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from build_env import configure_proxy, password_input, proxy_secrets
+    from build_env import configure_proxy, password_input, proxy_secrets, ntfy_settings, NTFY_KEYS
 
 REPO = Path(__file__).resolve().parents[1]
 GIB = 1024 ** 3
@@ -156,6 +156,9 @@ class Build:
         self.checks = {}
         self.details = {"build_id": self.id, "architecture": "amd64", "ubuntu": "24.04 LTS", "manual_acceptance": "pending"}
         self.proxy_env = configure_proxy()
+        self.ntfy_config = ntfy_settings(os.environ)
+        for key in NTFY_KEYS:
+            os.environ.pop(key, None)
         self.secret = password_input(os.environ, REPO / "config/local.env")
         self.password_hash = sp.check_output(["openssl", "passwd", "-6", "-stdin"], input=self.secret.encode()).decode().strip()
         os.environ.pop("UBUNTU_INITIAL_PASSWORD", None)
@@ -286,8 +289,9 @@ class Build:
         tools.mkdir()
         (tools / "build-root").write_text(self.id + "\n")
         shutil.copyfile(REPO / "config/packages.txt", tools / "packages.txt")
-        for name in ("server-info.sh", "server-update.sh", "check-v2raya.py", "proxy-shell.bash", "proxy-check.py"):
+        for name in ("server-info.sh", "server-update.sh", "check-v2raya.py", "proxy-shell.bash", "proxy-check.py", "ntfy_notify.py"):
             shutil.copyfile(REPO / "scripts" / name, tools / name)
+        self.install_ntfy_config(root)
         with self.progress("Downloading and verifying uv from GitHub"):
             self.uv(tools)
         with self.progress("Downloading and verifying latest stable v2rayA from GitHub"):
@@ -325,6 +329,17 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
         self.loop = None
         self.note("Ubuntu packages/configuration checks passed; image unmounted")
         return raw
+
+    def install_ntfy_config(self, root):
+        if not self.ntfy_config:
+            return
+        directory = root / "etc/ubuntu-customizer"
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        directory.chmod(0o700)
+        path = directory / "ntfy.json"
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w") as stream:
+            json.dump(self.ntfy_config, stream)
 
     def uv(self, destination):
         version = self.config["uv_version"]
@@ -548,6 +563,7 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
             log_dir.mkdir(exist_ok=True)
             text = raw_log.read_text(errors="replace")
             secrets = {self.secret, self.password_hash} | proxy_secrets(getattr(self, "proxy_env", {}))
+            secrets |= set((getattr(self, "ntfy_config", None) or {}).values())
             for secret in sorted(secrets, key=len, reverse=True):
                 if secret:
                     text = text.replace(secret, "<redacted>")

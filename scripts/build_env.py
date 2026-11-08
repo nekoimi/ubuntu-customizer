@@ -1,4 +1,4 @@
-"""Read build-only settings without sourcing or evaluating shell code."""
+"""Read build inputs and private runtime presets without evaluating shell code."""
 import os
 from pathlib import Path
 import shlex
@@ -6,9 +6,15 @@ import sys
 import urllib.request
 from urllib.parse import unquote, urlsplit
 
+if __package__:
+    from .ntfy_notify import validate_settings
+else:
+    from ntfy_notify import validate_settings
+
 LOCAL_ENV = Path(__file__).resolve().parents[1] / "config/local.env"
 PROXY_KEYS = ("http_proxy", "https_proxy", "no_proxy")
-ALLOWED_KEYS = {"UBUNTU_INITIAL_PASSWORD", *PROXY_KEYS, *(key.upper() for key in PROXY_KEYS)}
+NTFY_KEYS = ("NTFY_URL", "NTFY_TOPIC", "NTFY_TOKEN")
+ALLOWED_KEYS = {"UBUNTU_INITIAL_PASSWORD", *PROXY_KEYS, *(key.upper() for key in PROXY_KEYS), *NTFY_KEYS}
 
 
 def read_local_env(path):
@@ -20,7 +26,7 @@ def read_local_env(path):
             key, separator, raw = line.partition("=")
             key = key.strip()
             if not separator or key not in ALLOWED_KEYS:
-                raise ValueError("local.env accepts only password and HTTP_PROXY / HTTPS_PROXY / NO_PROXY settings")
+                raise ValueError("local.env accepts only password, HTTP_PROXY / HTTPS_PROXY / NO_PROXY and NTFY_URL / NTFY_TOPIC / NTFY_TOKEN settings")
             words = shlex.split(raw, comments=True)
             if len(words) > 1:
                 raise ValueError("local.env values must be single shell-quoted values")
@@ -33,6 +39,12 @@ def password_input(env, path):
     if not value or any(char in value for char in "\r\n\x00"):
         raise ValueError("Provide a nonempty single-line initial password via Secret or local.env")
     return value
+
+
+def ntfy_settings(env, path=LOCAL_ENV):
+    local = read_local_env(path)
+    values = {key.removeprefix("NTFY_").lower(): env.get(key, local.get(key, "")) for key in NTFY_KEYS}
+    return validate_settings(values) if any(values.values()) else None
 
 
 def proxy_environment(env, path):
@@ -87,6 +99,8 @@ def main():
         raise ValueError("Usage: python3 scripts/build_env.py --exec COMMAND [ARG ...]")
     configure_proxy()
     os.environ.pop("UBUNTU_INITIAL_PASSWORD", None)
+    for key in NTFY_KEYS:
+        os.environ.pop(key, None)
     os.execvp(sys.argv[2], sys.argv[2:])
 
 

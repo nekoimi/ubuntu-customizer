@@ -200,8 +200,45 @@ EOF
 install -m 0755 /tmp/customizer/server-info.sh /usr/local/bin/server-info
 install -m 0755 /tmp/customizer/server-update.sh /usr/local/bin/server-update
 install -m 0755 /tmp/customizer/proxy-check.py /usr/local/bin/proxy-check
+install -m 0755 /tmp/customizer/ntfy_notify.py /usr/local/sbin/ntfy-ip-notify
 install -m 0644 /tmp/customizer/proxy-shell.bash /etc/profile.d/customizer-proxy.sh
 printf '\nsource /etc/profile.d/customizer-proxy.sh\n' >> /etc/bash.bashrc
+cat > /etc/systemd/system/ubuntu-ip-notify.service <<'EOF'
+[Unit]
+Description=Notify ntfy of LAN IPv4 addresses
+After=network.target
+ConditionPathExists=/etc/ubuntu-customizer/ntfy.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ntfy-ip-notify
+TimeoutStartSec=25
+RuntimeDirectory=ubuntu-ip-notify
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+EOF
+cat > /etc/systemd/system/ubuntu-ip-notify.timer <<'EOF'
+[Unit]
+Description=Check LAN IPv4 notification every 30 seconds
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=30s
+AccuracySec=1s
+Unit=ubuntu-ip-notify.service
+
+[Install]
+WantedBy=timers.target
+EOF
+if [[ -f /etc/ubuntu-customizer/ntfy.json ]]; then
+    systemctl enable ubuntu-ip-notify.timer
+fi
 echo 'Configuring and testing UFW in an isolated network namespace'
 original_netns=$(readlink /proc/self/ns/net)
 UBUNTU_CUSTOMIZER_ORIGINAL_NETNS="$original_netns" unshare --net -- bash -se <<'FIREWALL_CONFIG'

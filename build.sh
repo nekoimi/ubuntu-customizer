@@ -29,7 +29,7 @@ as_root() {
         exec "$@"
     fi
     command -v sudo >/dev/null || { echo 'sudo is required, or run this command as root.' >&2; exit 1; }
-    exec sudo --preserve-env=UBUNTU_INITIAL_PASSWORD,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy -- "$@"
+    exec sudo --preserve-env=UBUNTU_INITIAL_PASSWORD,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy,NTFY_URL,NTFY_TOPIC,NTFY_TOKEN -- "$@"
 }
 command=${1:-build}
 if (($#)); then shift; fi

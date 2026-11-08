@@ -50,7 +50,13 @@ echo 'Docker HTTP/HTTPS proxy: http://127.0.0.1:20171; no node means external pu
 echo 'Bash helpers: proxy-on / proxy-off / proxy-status. Run proxy-check for connectivity checks.'
 inspect ss -lnt '( sport = :2017 or sport = :20170 or sport = :20171 or sport = :20172 )'
 section 'Maintenance timers'
-inspect systemctl list-timers --all --no-pager fstrim.timer apt-daily.timer
+inspect systemctl list-timers --all --no-pager fstrim.timer apt-daily.timer ubuntu-ip-notify.timer
+section 'LAN IP notifications'
+if [[ $EUID == 0 ]]; then
+    inspect ntfy-ip-notify --check-config
+else
+    echo 'Run sudo ntfy-ip-notify --check-config to validate the private ntfy configuration.'
+fi
 section 'Reboot status'
 if [[ -f /var/run/reboot-required ]]; then
     cat /var/run/reboot-required
