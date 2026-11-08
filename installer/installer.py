@@ -17,7 +17,7 @@ MEDIA = Path("/media/installer")
 PAYLOAD = MEDIA / "payload"
 # Includes tools used by finalize.sh outside the Ubuntu chroot, where missing
 # Alpine subpackages would otherwise be discovered only AFTER overwriting a disk.
-LIVE_TOOLS = ("bash", "zstd", "lsblk", "findmnt", "sgdisk", "parted", "partprobe",
+LIVE_TOOLS = ("bash", "zstd", "lsblk", "findmnt", "wipefs", "sgdisk", "parted", "partprobe",
               "e2fsck", "resize2fs", "tune2fs", "fatlabel", "blkid", "mount", "umount",
               "chroot", "awk", "od", "tr", "mkdir", "install", "dd", "chmod", "date", "sync")
 
@@ -270,6 +270,51 @@ def revalidate(selected, raw_bytes):
         raise Refusal("Disk disappeared, changed identity, or became busy after selection")
 
 
+def wipe_old_signatures(fd, selected, raw_bytes):
+    """After confirmation only: erase old signatures BEFORE writing the image.
+
+    Image writes cover only the template length. Old ZFS/RAID signatures near
+    the end of a larger partition would otherwise survive and confuse Ubuntu's
+    UUID discovery. Wipe old partitions before erasing the partition table.
+    """
+    revalidate(selected, raw_bytes)
+    # Explicit --tree is required: lsblk otherwise flattens JSON when NAME is
+    # omitted, so PATH-only output would hide the parent/child relationship.
+    tree = json.loads(output("lsblk", "--json", "--tree", "--paths", "--output", "PATH,TYPE,MAJ:MIN", selected["path"]))["blockdevices"]
+    if len(tree) != 1 or tree[0].get("path") != selected["path"] or tree[0].get("type") != "disk" or tree[0].get("maj:min") != selected["maj:min"]:
+        raise Refusal("Cannot identify confirmed disk for signature cleanup")
+    partitions = tree[0].get("children", [])
+    for node in partitions:
+        if node.get("type") != "part" or node.get("children") or not re.fullmatch(r"/dev/[A-Za-z0-9/_-]+", node.get("path", "")):
+            raise Refusal("Unexpected child device during signature cleanup")
+        if physical_roots(node["maj:min"]) != {Path(selected["path"]).name}:
+            raise Refusal("Partition is outside the confirmed disk")
+
+    def erase(opened, major_minor):
+        info = os.fstat(opened)
+        if not stat.S_ISBLK(info.st_mode) or f"{os.major(info.st_rdev)}:{os.minor(info.st_rdev)}" != major_minor:
+            raise Refusal("Signature cleanup device identity changed")
+        revalidate(selected, raw_bytes)
+        # Use the verified, already opened device, not a path that could be
+        # replaced between checking it and starting wipefs. No global /dev glob.
+        sp.run(["wipefs", "--all", "--force", "--", f"/proc/self/fd/{opened}"],
+               pass_fds=(opened,), check=True)
+
+    print("Clearing old filesystem/RAID signatures on the confirmed disk before image writing...")
+    for node in partitions:
+        partition_fd = os.open(node["path"], os.O_RDWR | os.O_CLOEXEC)
+        try:
+            if physical_roots(node["maj:min"]) != {Path(selected["path"]).name}:
+                raise Refusal("Partition parent changed during signature cleanup")
+            erase(partition_fd, node["maj:min"])
+        finally:
+            os.close(partition_fd)
+    erase(fd, selected["maj:min"])
+    os.fsync(fd)
+    revalidate(selected, raw_bytes)
+    os.lseek(fd, 0, os.SEEK_SET)
+
+
 def write_image(fd, image, expected_bytes, expected_hash):
     written = 0
     hasher = hashlib.sha256()
@@ -341,6 +386,7 @@ def main(*, check_tools_only=False):
         if not stat.S_ISBLK(device.st_mode) or f"{os.major(device.st_rdev)}:{os.minor(device.st_rdev)}" != selected["maj:min"]:
             raise Refusal("Opened device is not the confirmed disk")
         revalidate(selected, manifest["raw_bytes"])
+        wipe_old_signatures(fd, selected, manifest["raw_bytes"])
         write_image(fd, image, manifest["raw_bytes"], manifest["raw_sha256"])
     finally:
         os.close(fd)

@@ -435,7 +435,7 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
             raise ValueError("Invalid Alpine branch")
         mirrors = alpine_mirrors(self.config)
         packages = ["alpine-base", "linux-firmware-none", "linux-lts", "busybox-static",
-                    "python3", "bash", "util-linux", "lsblk", "findmnt", "parted", "sgdisk",
+                    "python3", "bash", "util-linux", "lsblk", "findmnt", "wipefs", "parted", "sgdisk",
                     "e2fsprogs", "e2fsprogs-extra", "dosfstools", "zstd", "coreutils", "kmod"]
         for index, mirror in enumerate(mirrors):
             (root / "etc/apk/repositories").write_text(

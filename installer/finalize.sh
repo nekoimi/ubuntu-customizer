@@ -73,6 +73,29 @@ chroot "$target" grub-install --target=i386-pc --recheck "$disk"
 chroot "$target" grub-install --target=x86_64-efi --efi-directory=/boot/efi \
     --removable --no-nvram --no-uefi-secure-boot --recheck
 chroot "$target" update-grub
+echo 'Checking root and EFI filesystem detection using installed Ubuntu tools'
+# Alpine and the installed Ubuntu can ship different libblkid versions and
+# detect different signatures. Test with Ubuntu's own probe before claiming
+# success; a successful ext4 mount alone does not prove UUID discovery works.
+chroot "$target" /bin/bash -se -- "$root" "$root_uuid" "$esp" "$esp_uuid" <<'FILESYSTEM_CHECK'
+set -euo pipefail
+root_probe=$(blkid -p -o export "$1") || {
+    echo 'Ubuntu cannot unambiguously identify the root filesystem; possible conflicting signatures. Installation is incomplete.' >&2
+    exit 1
+}
+if ! grep -qx 'TYPE=ext4' <<< "$root_probe" || ! grep -Fxq "UUID=$2" <<< "$root_probe"; then
+    echo 'Ubuntu root filesystem type or UUID does not match the installed configuration.' >&2
+    exit 1
+fi
+esp_probe=$(blkid -p -o export "$3") || {
+    echo 'Ubuntu cannot unambiguously identify the EFI filesystem. Installation is incomplete.' >&2
+    exit 1
+}
+if ! grep -qx 'TYPE=vfat' <<< "$esp_probe" || ! grep -Fxq "UUID=$4" <<< "$esp_probe"; then
+    echo 'Ubuntu EFI filesystem type or UUID does not match the installed configuration.' >&2
+    exit 1
+fi
+FILESYSTEM_CHECK
 printf 'build_id=%s\ninstalled_at=%s\n' "$build_id" "$(date -u +%FT%TZ)" > "$target/var/lib/ubuntu-customizer/installation"
 sync
 cleanup
