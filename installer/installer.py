@@ -165,10 +165,38 @@ def interaction_panel(title, lines, *, color="33"):
     print(highlight(border, color=color), flush=True)
 
 
+def welcome(prompt=None):
+    interaction_panel("UBUNTU CUSTOMIZER", [
+        "       _   _ ____  _   _ _   _ _____ _   _",
+        "      | | | | __ )| | | | \\ | |_   _| | | |",
+        "      | | | |  _ \\| | | |  \\| | | | | | | |",
+        "      | |_| | |_) | |_| | |\\  | | | | |_| |",
+        "       \\___/|____/ \\___/|_| \\_| |_|  \\___/",
+        "",
+        "  Customized Ubuntu Server 24.04 LTS | x86_64",
+        "  Alpine Live Installer | Offline whole-disk installation",
+        "",
+        "[ACTION REQUIRED 1/3] START INSTALLER",
+        "  The installer is paused. No target disk has been written.",
+        "  Continue to verify the image and select an installation disk.",
+        "  Installing will replace ALL data on the selected disk.",
+        "  A separate disk erasure confirmation is required before writing.",
+        "",
+        "Type y + Enter to continue. Any other answer cancels.",
+        "No timeout. The disk selection timer has NOT started.",
+    ], color="36")
+    if not sys.stdin.isatty():
+        raise Refusal("Interactive local terminal required")
+    if prompt is None:
+        prompt = input
+    if prompt(highlight(">>> START INSTALLER [y = continue / other = cancel]: ", color="36")).lower() != "y":
+        raise Refusal("Installer start not confirmed")
+
+
 def select_disk(disks, timeout=30):
     if not disks:
         raise Refusal("No eligible disk. USB, removable, busy, read-only and incompatible disks are excluded.")
-    interaction_panel("[ACTION REQUIRED 1/2] SELECT INSTALLATION DISK", [
+    interaction_panel("[ACTION REQUIRED 2/3] SELECT INSTALLATION DISK", [
         "No target disk has been written.",
         f"After {timeout}s with no input, the largest eligible disk is selected.",
         "Selection NEVER authorizes erasure; a separate confirmation follows.",
@@ -220,7 +248,7 @@ def select_disk(disks, timeout=30):
 
 
 def confirm(disk, prompt=input):
-    interaction_panel("[ACTION REQUIRED 2/2] CONFIRM DISK ERASURE", [
+    interaction_panel("[ACTION REQUIRED 3/3] CONFIRM DISK ERASURE", [
         highlight("WARNING: ALL DATA ON THIS DISK WILL BE LOST.", color="31"),
         "",
         f"  Target : {disk['path']}",
@@ -294,7 +322,7 @@ def main(*, check_tools_only=False):
     if check_tools_only:
         print("Alpine Live installer tools checked; no disks accessed.")
         return
-    print("Ubuntu Server offline installer — complete disk replacement")
+    welcome()
     manifest = json.loads((PAYLOAD / "manifest.json").read_text())
     validate_manifest(manifest)
     if (MEDIA / "UBUNTU_CUSTOMIZER_MEDIA").read_text().strip() != manifest["build_id"]:

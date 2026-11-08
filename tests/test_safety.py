@@ -75,6 +75,65 @@ class SelectionSafety(unittest.TestCase):
                 installer.revalidate(selected, 1024)
 
 
+class WelcomeSafety(unittest.TestCase):
+    def test_only_explicit_y_starts_installer(self):
+        for answer in ("", "n", "yes", "y ", " y", "1", "y", "Y"):
+            with self.subTest(answer=answer), \
+                    patch.object(installer.sys.stdin, "isatty", return_value=True), \
+                    patch.object(installer.sys, "stdout", io.StringIO()) as display:
+                prompt = Mock(return_value=answer)
+                if answer in ("y", "Y"):
+                    installer.welcome(prompt)
+                else:
+                    with self.assertRaisesRegex(installer.Refusal, "start not confirmed"):
+                        installer.welcome(prompt)
+                prompt.assert_called_once()
+                self.assertIn("UBUNTU CUSTOMIZER", display.getvalue())
+                self.assertIn("No timeout", display.getvalue())
+                self.assertIn("timer has NOT started", display.getvalue())
+
+    def test_noninteractive_input_cannot_start_installer(self):
+        with patch.object(installer.sys.stdin, "isatty", return_value=False), \
+                patch.object(installer.sys, "stdout", io.StringIO()):
+            prompt = Mock(return_value="y")
+            with self.assertRaisesRegex(installer.Refusal, "Interactive local terminal required"):
+                installer.welcome(prompt)
+            prompt.assert_not_called()
+
+    def test_cancellation_or_interruption_never_reaches_payload_or_disks(self):
+        for answer in ("n", "", EOFError(), KeyboardInterrupt()):
+            with self.subTest(answer=answer), \
+                    patch.object(installer.os, "geteuid", return_value=0, create=True), \
+                    patch.object(installer, "check_live_tools"), \
+                    patch.object(installer.sys.stdin, "isatty", return_value=True), \
+                    patch.object(installer.sys, "stdout", io.StringIO()), \
+                    patch("builtins.input", side_effect=answer if isinstance(answer, BaseException) else None,
+                          return_value=answer), \
+                    patch.object(installer.Path, "read_text") as read_media, \
+                    patch.object(installer, "sha256_file") as verify, \
+                    patch.object(installer.sp, "run") as command, \
+                    patch.object(installer, "discover") as discover, \
+                    patch.object(installer, "select_disk") as selection, \
+                    patch.object(installer, "confirm") as confirmation, \
+                    patch.object(installer.os, "open") as open_target:
+                with self.assertRaises((installer.Refusal, EOFError, KeyboardInterrupt)):
+                    installer.main()
+                for operation in (read_media, verify, command, discover, selection, confirmation, open_target):
+                    operation.assert_not_called()
+
+    def test_accepting_start_proceeds_to_payload_validation(self):
+        with patch.object(installer.os, "geteuid", return_value=0, create=True), \
+                patch.object(installer, "check_live_tools"), \
+                patch.object(installer.sys.stdin, "isatty", return_value=True), \
+                patch.object(installer.sys, "stdout", io.StringIO()), \
+                patch("builtins.input", return_value="y") as prompt, \
+                patch.object(installer.Path, "read_text", side_effect=installer.Refusal("payload reached")) as read_media:
+            with self.assertRaisesRegex(installer.Refusal, "payload reached"):
+                installer.main()
+            prompt.assert_called_once()
+            read_media.assert_called_once()
+
+
 class StreamSafety(unittest.TestCase):
     def exercise(self, data, expected_size, expected_hash, returncode=0, alter_read=False):
         process = Mock(stdout=io.BytesIO(data))
@@ -275,6 +334,7 @@ class WriteGateSafety(unittest.TestCase):
                 with patch.object(installer, "MEDIA", media), patch.object(installer, "PAYLOAD", payload), \
                         patch.object(installer.os, "geteuid", return_value=0, create=True), \
                         patch.object(installer, "check_live_tools"), \
+                        patch.object(installer, "welcome"), \
                         patch.object(installer, "sha256_file", return_value="0" * 64), \
                         patch.object(installer.sp, "run"), patch.object(installer, "discover", return_value=[disk("/dev/sda")]), \
                         patch.object(installer, "select_disk", return_value=disk("/dev/sda")), \
