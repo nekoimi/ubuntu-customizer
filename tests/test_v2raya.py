@@ -80,6 +80,8 @@ class GuestProxyPreset(unittest.TestCase):
 
         def request(path, data=None, *, method=None, token=None):
             if path == "account":
+                if data and not 6 <= len(data["password"]) <= 32:
+                    raise RuntimeError("length of password should be between 6 and 32")
                 return {"token": "temporary-token"} if data else {"hasAnyAccounts": accounts}
             if path in ("ports", "setting"):
                 if method == "PUT":
@@ -106,6 +108,19 @@ class GuestProxyPreset(unittest.TestCase):
         self.assertTrue(state["setting"]["ipforward"])
         self.assertFalse(state["setting"]["portSharing"])
         api.check_web.assert_called_once()
+
+    def test_temporary_password_meets_api_limit_and_is_fresh_for_each_build(self):
+        passwords = []
+        for _ in range(2):
+            api, _ = self.api()
+            guest.configure(api)
+            account_call = next(call for call in api.request.call_args_list
+                                if call.args[0] == "account" and len(call.args) > 1)
+            password = account_call.args[1]["password"]
+            self.assertGreaterEqual(len(password), 6)
+            self.assertLessEqual(len(password), 32)
+            passwords.append(password)
+        self.assertNotEqual(passwords[0], passwords[1])
 
     def test_existing_account_wrong_port_or_running_core_refuses_build(self):
         for options in ({"accounts": True}, {"wrong_port": True}, {"running": True}):

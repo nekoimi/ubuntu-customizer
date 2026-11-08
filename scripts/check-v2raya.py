@@ -80,7 +80,9 @@ class API:
 def configure(api):
     if api.request("account").get("hasAnyAccounts") is not False:
         raise RuntimeError("Refusing to configure v2rayA with existing accounts")
-    token = api.request("account", {"username": "build-check", "password": secrets.token_urlsafe(32)})["token"]
+    # token_urlsafe takes bytes, not characters: 24 bytes encode to 32 ASCII
+    # characters, meeting v2rayA's 6-32 character password limit.
+    token = api.request("account", {"username": "build-check", "password": secrets.token_urlsafe(24)})["token"]
     api.request("ports", PORTS, method="PUT", token=token)
     setting = api.request("setting", token=token)["setting"]
     api.request("setting", {**setting, **SETTINGS}, method="PUT", token=token)
