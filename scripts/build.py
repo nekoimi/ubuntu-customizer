@@ -30,6 +30,21 @@ else:
 REPO = Path(__file__).resolve().parents[1]
 GIB = 1024 ** 3
 PROGRESS_INTERVAL = 30
+ALPINE_FALLBACK_MIRRORS = ["https://mirrors.tuna.tsinghua.edu.cn/alpine"]
+
+
+def alpine_mirrors(config):
+    fallbacks = config.get("alpine_fallback_mirrors", ALPINE_FALLBACK_MIRRORS)
+    if not isinstance(fallbacks, list):
+        raise ValueError("alpine_fallback_mirrors must be a list of HTTPS URLs")
+    mirrors = []
+    for mirror in [config["alpine_mirror"], *fallbacks]:
+        if not isinstance(mirror, str) or not mirror.startswith("https://") or any(c.isspace() for c in mirror):
+            raise ValueError("HTTPS URL required for Alpine mirror")
+        mirror = mirror.rstrip("/")
+        if mirror not in mirrors:
+            mirrors.append(mirror)
+    return mirrors
 
 
 def check_build_isolation():
@@ -119,6 +134,7 @@ class Build:
         for key in ("ubuntu_mirror", "docker_mirror", "python_index", "alpine_mirror"):
             if not self.config[key].startswith("https://") or any(c.isspace() for c in self.config[key]):
                 raise ValueError("HTTPS URL required: " + key)
+        alpine_mirrors(self.config)
         if not Path(self.config["work_dir"]).is_absolute() or not Path(self.config["release_dir"]).is_absolute():
             raise ValueError("Absolute persistent paths required")
         self.work_base = Path(self.config["work_dir"]).resolve()
@@ -330,6 +346,31 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
                     shutil.copyfileobj(source, target)
         self.details["uv"] = {"version": version, "archive_sha256": sha}
 
+    def install_alpine_packages(self, root, branch):
+        if not re.fullmatch(r"v3\.[0-9]+", branch):
+            raise ValueError("Invalid Alpine branch")
+        mirrors = alpine_mirrors(self.config)
+        packages = ["alpine-base", "linux-firmware-none", "linux-lts", "busybox-static",
+                    "python3", "bash", "util-linux", "lsblk", "findmnt", "parted", "sgdisk",
+                    "e2fsprogs", "e2fsprogs-extra", "dosfstools", "zstd", "coreutils", "kmod"]
+        for index, mirror in enumerate(mirrors):
+            (root / "etc/apk/repositories").write_text(
+                f"{mirror}/{branch}/main\n{mirror}/{branch}/community\n")
+            for attempt in (1, 2):
+                try:
+                    # --no-cache fetches fresh indexes on each attempt. Keep default
+                    # signature verification and the branch selected from metadata.
+                    self.run(["chroot", root, "apk", "add", "--no-cache", *packages],
+                             label=f"Installing Alpine Live packages (APK; mirror {index + 1}/{len(mirrors)}, attempt {attempt}/2)")
+                    return mirror
+                except sp.CalledProcessError:
+                    if attempt == 2 and index == len(mirrors) - 1:
+                        raise
+                    self.note("APK installation failed; " + (
+                        "retrying with fresh indexes in 5s" if attempt == 1 else
+                        "switching to next configured Alpine mirror in 5s") + "; details in tools.log")
+                    time.sleep(5)
+
     def alpine(self, iso):
         import yaml
         self.note("Building Alpine Live root and RAM boot environment")
@@ -351,10 +392,9 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
         root = self.work / "alpine"
         root.mkdir()
         self.run(["tar", "-xzf", archive, "-C", root])
-        (root / "etc/apk/repositories").write_text(f"{mirror}/{branch}/main\n{mirror}/{branch}/community\n")
         self.api_mounts(root)
         # Alpine packages the scripted GPT tool separately from interactive gdisk.
-        self.run(["chroot", root, "apk", "add", "--no-cache", "alpine-base", "linux-firmware-none", "linux-lts", "busybox-static", "python3", "bash", "util-linux", "lsblk", "findmnt", "parted", "sgdisk", "e2fsprogs", "e2fsprogs-extra", "dosfstools", "zstd", "coreutils", "kmod"], label="Installing Alpine Live packages (APK)")
+        apk_mirror = self.install_alpine_packages(root, branch)
         library = root / "usr/local/lib/ubuntu-customizer"
         library.mkdir(parents=True)
         for name in ("installer.py", "finalize.sh"):
@@ -371,7 +411,8 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
         self.run(["chroot", root, "rc-update", "add", "devfs", "sysinit"])
         self.run(["chroot", root, "rc-update", "add", "mdev", "sysinit"])
         self.run(["chroot", root, "rc-update", "add", "hwdrivers", "sysinit"])
-        self.details["alpine"] = {"version": entry["version"], "branch": branch, "minirootfs_sha256": entry["sha256"]}
+        self.details["alpine"] = {"version": entry["version"], "branch": branch,
+                                  "minirootfs_sha256": entry["sha256"], "apk_mirror": apk_mirror}
         self.details["alpine"]["kernels"] = sorted(path.name for path in (root / "lib/modules").iterdir())
         self.details["alpine"]["packages"] = self.output(["chroot", root, "apk", "info", "-v"]).splitlines()
         self.unmount_to(0)

@@ -5,6 +5,7 @@
   "python_index": "https://pypi.tuna.tsinghua.edu.cn/simple",
   "alpine_release": "latest-stable",
   "alpine_mirror": "https://mirrors.aliyun.com/alpine",
+  "alpine_fallback_mirrors": ["https://mirrors.tuna.tsinghua.edu.cn/alpine"],
   "uv_version": "latest",
   "template_gib": 24,
   "compression_threads": 4,
