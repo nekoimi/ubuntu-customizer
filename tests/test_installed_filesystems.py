@@ -16,6 +16,10 @@ CHECK = SCRIPT.split("<<'FILESYSTEM_CHECK'\n", 1)[1].split("\nFILESYSTEM_CHECK",
 class InstalledFilesystems(unittest.TestCase):
     def check(self, *, root_status=0, esp_status=0, root_uuid="root-new", esp_uuid="efi-new", root_type="ext4"):
         stub = r'''
+wipefs() {
+    [[ $1 == --no-act && $2 == -- ]] || return 99
+    printf 'read-only signature inventory for %s\n' "$3"
+}
 blkid() {
     [[ $1 == -p && $2 == -o && $3 == export ]] || return 99
     if [[ $4 == /dev/testdisk3 ]]; then
@@ -51,10 +55,38 @@ blkid() {
             with self.subTest(options=options):
                 self.assertNotEqual(self.check(**options).returncode, 0)
 
+    def test_probe_failures_show_device_and_exit_code_and_uuid_mismatches_show_actual_value(self):
+        result = self.check(root_status=8)
+        self.assertIn("Device=/dev/testdisk3; blkid exit=8", result.stderr)
+        self.assertIn("read-only signature inventory for /dev/testdisk3", result.stderr)
+        result = self.check(esp_status=2)
+        self.assertIn("Device=/dev/testdisk2; blkid exit=2", result.stderr)
+        self.assertIn("read-only signature inventory for /dev/testdisk2", result.stderr)
+        result = self.check(root_uuid="wrong-root")
+        self.assertIn("UUID=root-new", result.stderr)
+        self.assertIn("UUID=wrong-root", result.stderr)
+
 
 @unittest.skipUnless(BASH, "Bash is required for finalization diagnostics")
 class FinalizationDiagnostics(unittest.TestCase):
     SETUP = SCRIPT.split("[[ ${UBUNTU_CUSTOMIZER_WRITE_VERIFIED", 1)[0]
+
+    def test_heredoc_failure_keeps_original_output_without_dumping_script_body(self):
+        failure = r'''
+finalize_stage='Checking filesystems'
+bash -se <<'CHECK'
+# SCRIPT_BODY_MUST_NOT_FILL_THE_REPORT
+echo 'actual filesystem failure' >&2
+exit 7
+CHECK
+'''
+        result = subprocess.run([BASH, "-s"], input=self.SETUP + failure,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertIn("actual filesystem failure", result.stderr)
+        self.assertIn("exit 7", result.stderr)
+        self.assertIn("[script body omitted]", result.stderr)
+        self.assertNotIn("SCRIPT_BODY_MUST_NOT_FILL_THE_REPORT", result.stderr)
 
     def test_command_and_pipeline_failures_report_stage_and_preserve_exit_code(self):
         for command, status in (("false", 1), ("(exit 7) | cat", 7),

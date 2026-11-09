@@ -10,6 +10,7 @@ Usage: bash build.sh [command] [options]
   check [--config FILE] Check host tools, resources and output paths; no writes
   check-downloads       Check GitHub downloads with build proxy settings; no ISO build
   test                  Run safety tests and script static checks
+  vm-test [options]     Run a file-backed QEMU/KVM installation test (Linux)
   build [options]       Build the ISO (default command; uses sudo if needed)
   help                  Show this help
 
@@ -42,6 +43,7 @@ case "$command" in
         ;;
     check) exec python3 "$repo/scripts/build.py" --check "$@" ;;
     check-downloads) exec python3 "$repo/scripts/build.py" --check-downloads "$@" ;;
+    vm-test) exec python3 "$repo/scripts/vm_test.py" "$@" ;;
     test)
         (($# == 0)) || { usage >&2; exit 2; }
         exec bash "$repo/scripts/check.sh"

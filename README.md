@@ -20,6 +20,8 @@ GitHub 下载失败时，可先运行 `bash build.sh check-downloads`，使用�
 
 重复构建会复用 `/srv/ubuntu-customizer/cache/apt/archives` 中的 Ubuntu / Docker / Tailscale `.deb` 软件包，减少下载量；仓库索引仍刷新并验证签名。缓存目录由 `config/build.json` 的 `cache_dir` 配置，设为 `null` 可禁用。首次下载速度仍取决于镜像站和构建代理。
 
+可在 Linux 服务器执行 `bash build.sh vm-test --iso <ISO路径>`，使用 KVM、独立虚拟 NVMe 和本机 VNC 测试安装；安装后用 `--boot installed` 启动同一测试盘。依赖安装、Windows SSH 隧道和完整日志导出见 [Linux 虚拟机安装测试](docs/Linux虚拟机安装测试.md)。
+
 入口在需要时自动调用 sudo。构建编号默认自动生成，ISO 保存到 `/srv/ubuntu-customizer/releases/<build-id>/ubuntu-custom-server.iso`，终端会显示实际路径。`bash build.sh test` 可运行安全测试和静态检查，`bash build.sh --help` 查看用法。
 
 终端显示主要步骤的开始、完成和耗时；长时间运行时每 30 秒提示当前步骤仍在执行。详细下载、安装输出保存在终端提示的 `tools.log`，可在另一个终端用 `sudo tail -f <日志路径>` 查看。

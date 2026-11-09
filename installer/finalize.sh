@@ -11,6 +11,11 @@ report_stage() {
 }
 record_error() {
     local status=$1 line=$2 command=$3
+    # BASH_COMMAND includes the entire here-document for chroot checks. Printing
+    # its body buries the real tool error and fills the report's recent output.
+    if [[ $command == *$'\n'* ]]; then
+        command="${command%%$'\n'*} [script body omitted]"
+    fi
     finalize_error_reported=1
     printf 'Finalization failed: %s (line %s, exit %s): %s\n' "$finalize_stage" "$line" "$status" "$command" >&2
     if [[ -n ${UBUNTU_CUSTOMIZER_ERROR_FILE:-} ]]; then
@@ -143,19 +148,31 @@ report_stage
 chroot "$target" /bin/bash -se -- "$root" "$root_uuid" "$esp" "$esp_uuid" <<'FILESYSTEM_CHECK'
 set -euo pipefail
 root_probe=$(blkid -p -o export "$1") || {
-    echo 'Ubuntu cannot unambiguously identify the root filesystem; possible conflicting signatures. Installation is incomplete.' >&2
+    probe_status=$?
+    printf 'Ubuntu cannot unambiguously identify the root filesystem; possible conflicting signatures. Device=%s; blkid exit=%s. Installation is incomplete.\n' "$1" "$probe_status" >&2
+    printf 'Root probe output: %s\n' "${root_probe:-<empty>}" >&2
+    ls -l -- "$1" >&2 || true
+    echo 'Ubuntu read-only root signature inventory:' >&2
+    wipefs --no-act -- "$1" >&2 || true
     exit 1
 }
 if ! grep -qx 'TYPE=ext4' <<< "$root_probe" || ! grep -Fxq "UUID=$2" <<< "$root_probe"; then
     echo 'Ubuntu root filesystem type or UUID does not match the installed configuration.' >&2
+    printf 'Expected root: device=%s TYPE=ext4 UUID=%s\nActual probe:\n%s\n' "$1" "$2" "$root_probe" >&2
     exit 1
 fi
 esp_probe=$(blkid -p -o export "$3") || {
-    echo 'Ubuntu cannot unambiguously identify the EFI filesystem. Installation is incomplete.' >&2
+    probe_status=$?
+    printf 'Ubuntu cannot unambiguously identify the EFI filesystem. Device=%s; blkid exit=%s. Installation is incomplete.\n' "$3" "$probe_status" >&2
+    printf 'EFI probe output: %s\n' "${esp_probe:-<empty>}" >&2
+    ls -l -- "$3" >&2 || true
+    echo 'Ubuntu read-only EFI signature inventory:' >&2
+    wipefs --no-act -- "$3" >&2 || true
     exit 1
 }
 if ! grep -qx 'TYPE=vfat' <<< "$esp_probe" || ! grep -Fxq "UUID=$4" <<< "$esp_probe"; then
     echo 'Ubuntu EFI filesystem type or UUID does not match the installed configuration.' >&2
+    printf 'Expected EFI: device=%s TYPE=vfat UUID=%s\nActual probe:\n%s\n' "$3" "$4" "$esp_probe" >&2
     exit 1
 fi
 FILESYSTEM_CHECK
