@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Offline whole-disk installer. Discovery and confirmation precede every write."""
 import argparse
+from collections import deque
+from contextlib import contextmanager
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -11,10 +14,14 @@ import shutil
 import stat
 import subprocess as sp
 import sys
+import tempfile
+import threading
 import time
+import traceback
 
 MEDIA = Path("/media/installer")
 PAYLOAD = MEDIA / "payload"
+SESSION = None
 # Includes tools used by finalize.sh outside the Ubuntu chroot, where missing
 # Alpine subpackages would otherwise be discovered only AFTER overwriting a disk.
 LIVE_TOOLS = ("bash", "zstd", "lsblk", "findmnt", "wipefs", "sgdisk", "parted", "partprobe",
@@ -26,6 +33,134 @@ class Refusal(RuntimeError):
     pass
 
 
+class InstallationReport:
+    def __init__(self, log_root=Path("/var/log/ubuntu-customizer")):
+        log_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.directory = Path(tempfile.mkdtemp(prefix=datetime.now(timezone.utc).strftime("install-%Y%m%dT%H%M%SZ-"), dir=log_root))
+        self.log_path = self.directory / "installation.log"
+        self.summary_path = self.directory / "error.txt"
+        self.stage_path = self.directory / "finalize-stage.txt"
+        self.command_path = self.directory / "finalize-error.txt"
+        self.stage = "Starting installer"
+        self.disk = None
+        self.build_id = "unknown"
+        self.writes_started = False
+        self.console_isatty = os.isatty(1)
+        self.recent = deque(maxlen=12)
+        self.capture_error = None
+
+    @contextmanager
+    def capture(self):
+        sys.stdout.flush()
+        sys.stderr.flush()
+        terminal = os.dup(1)
+        original_error = os.dup(2)
+        reader, writer = os.pipe()
+        with self.log_path.open("xb", buffering=0) as log:
+            os.chmod(self.log_path, 0o600)
+
+            def copy_output():
+                with os.fdopen(reader, "rb", buffering=0) as source:
+                    while chunk := source.read(8192):
+                        try:
+                            log.write(chunk)
+                        except OSError as error:
+                            self.capture_error = error
+                        self.recent.append(chunk.decode("utf-8", errors="replace"))
+                        view = memoryview(chunk)
+                        try:
+                            while view:
+                                view = view[os.write(terminal, view):]
+                        except OSError:
+                            pass
+
+            copier = threading.Thread(target=copy_output, daemon=True)
+            copier.start()
+            try:
+                os.dup2(writer, 1)
+                os.dup2(writer, 2)
+                os.close(writer)
+                yield
+            finally:
+                sys.stdout.flush()
+                sys.stderr.flush()
+                os.dup2(terminal, 1)
+                os.dup2(original_error, 2)
+                copier.join()
+                os.close(terminal)
+                os.close(original_error)
+
+    def diagnostics(self):
+        commands = [["lsblk", "--paths", "--output", "NAME,TYPE,SIZE,PARTN,FSTYPE,UUID,MOUNTPOINTS"],
+                    ["findmnt"], ["dmesg"]]
+        if self.disk:
+            commands.insert(1, ["parted", "--script", self.disk, "unit", "s", "print"])
+        with self.log_path.open("a", encoding="utf-8") as log:
+            log.write("\n=== Automatic read-only diagnostics ===\n")
+            for command in commands:
+                log.write("\n$ " + " ".join(command) + "\n")
+                try:
+                    result = sp.run(command, stdout=sp.PIPE, stderr=sp.STDOUT, text=True,
+                                    errors="replace", timeout=5, check=False)
+                    log.write(result.stdout[-32768:] + f"\nExit: {result.returncode}\n")
+                except (OSError, sp.TimeoutExpired) as error:
+                    log.write(f"Diagnostic unavailable: {error}\n")
+            if self.disk:
+                # Inspect the actual children reported by lsblk; do not guess
+                # sda3 versus nvme0n1p3 or probe unrelated disks.
+                try:
+                    tree = sp.run(["lsblk", "--json", "--tree", "--paths", "--output", "PATH,TYPE", self.disk],
+                                  capture_output=True, text=True, timeout=5, check=True)
+                    partitions = [node for node in flatten(json.loads(tree.stdout)["blockdevices"]) if node.get("type") == "part"]
+                    for node in partitions[:8]:
+                        for tool in (["blkid", "-p"], ["wipefs", "--no-act"]):
+                            command = [*tool, "--", node["path"]]
+                            log.write("\n$ " + " ".join(command) + "\n")
+                            try:
+                                result = sp.run(command, stdout=sp.PIPE, stderr=sp.STDOUT, text=True,
+                                                errors="replace", timeout=3, check=False)
+                                log.write(result.stdout[-8192:] + f"\nExit: {result.returncode}\n")
+                            except (OSError, sp.TimeoutExpired) as error:
+                                log.write(f"Probe unavailable: {error}\n")
+                except (OSError, sp.SubprocessError, ValueError, KeyError) as error:
+                    log.write(f"Partition diagnostics unavailable: {error}\n")
+
+    def failure(self, error):
+        stage = self.stage_path.read_text().strip() if self.stage_path.exists() else self.stage
+        command = self.command_path.read_text().strip() if self.command_path.exists() else ""
+        if isinstance(error, sp.CalledProcessError) and not command:
+            command = f"exit {error.returncode}: {error.cmd}"
+        details = [f"Stage: {stage}", f"Build: {self.build_id}", f"Target: {self.disk or 'not selected'}",
+                   f"Target modifications started: {self.writes_started}",
+                   f"Exception: {type(error).__name__}: {error}", f"Command: {command or 'see Python traceback'}"]
+        recent = "".join(self.recent).replace("\r", "\n").splitlines()[-10:]
+        self.summary_path.write_text("\n".join(details + ["", "Recent output:", *recent]) + "\n", encoding="utf-8")
+        os.chmod(self.summary_path, 0o600)
+        print("\nInstallation stopped. Collecting read-only diagnostics (up to 5s per command)...", flush=True)
+        try:
+            self.diagnostics()
+        except (OSError, sp.SubprocessError, ValueError) as diagnostic_error:
+            print(f"Some automatic diagnostics were unavailable: {diagnostic_error}", file=sys.stderr)
+        interaction_panel("[ERROR] INSTALLATION STOPPED", [
+            *details, "", "RECENT OUTPUT", *recent, "",
+            f"Full log: {self.log_path}", f"Summary : {self.summary_path}",
+            "Read the full log: less " + str(self.log_path),
+            "Logs are in Live RAM. Copy this directory before rebooting.",
+            "Installation is incomplete. No automatic retry or reboot.",
+        ], color="31")
+
+
+def installation_stage(stage, *, disk=None, build_id=None, writes_started=False):
+    if SESSION is not None:
+        SESSION.stage = stage
+        if disk:
+            SESSION.disk = disk
+        if build_id:
+            SESSION.build_id = build_id
+        if writes_started:
+            SESSION.writes_started = True
+
+
 def check_live_tools():
     missing = [tool for tool in LIVE_TOOLS if not shutil.which(tool)]
     if missing:
@@ -33,7 +168,12 @@ def check_live_tools():
 
 
 def output(*args):
-    return sp.check_output(args, text=True).strip()
+    result = sp.run(args, stdout=sp.PIPE, stderr=sp.PIPE, text=True)
+    if result.returncode:
+        print(result.stdout, end="", file=sys.stderr)
+        print(result.stderr, end="", file=sys.stderr)
+        result.check_returncode()
+    return result.stdout.strip()
 
 
 def sha256_file(path):
@@ -150,7 +290,7 @@ def discover(raw_bytes):
 
 def highlight(text, *, color="33"):
     # Keep redirected logs and basic terminals readable without escape codes.
-    if sys.stdout.isatty() and os.environ.get("TERM") != "dumb" and "NO_COLOR" not in os.environ:
+    if (sys.stdout.isatty() or (SESSION is not None and SESSION.console_isatty)) and os.environ.get("TERM") != "dumb" and "NO_COLOR" not in os.environ:
         return f"\033[1;{color}m{text}\033[0m"
     return text
 
@@ -346,6 +486,7 @@ def write_image(fd, image, expected_bytes, expected_hash):
         if decompressor.poll() is None:
             decompressor.terminate()
             decompressor.wait()
+    installation_stage("Reading back and verifying written image SHA256")
     print("\nReading back written image before partition/configuration changes...")
     os.lseek(fd, 0, os.SEEK_SET)
     remaining = expected_bytes
@@ -361,15 +502,19 @@ def write_image(fd, image, expected_bytes, expected_hash):
 
 
 def main(*, check_tools_only=False):
+    installation_stage("Checking Live installer prerequisites")
     if os.geteuid() != 0:
         raise Refusal("Root required inside Alpine Live")
     check_live_tools()
     if check_tools_only:
         print("Alpine Live installer tools checked; no disks accessed.")
         return
+    installation_stage("Waiting for installer start confirmation")
     welcome()
+    installation_stage("Validating installation media and manifest")
     manifest = json.loads((PAYLOAD / "manifest.json").read_text())
     validate_manifest(manifest)
+    installation_stage("Verifying compressed system image", build_id=manifest["build_id"])
     if (MEDIA / "UBUNTU_CUSTOMIZER_MEDIA").read_text().strip() != manifest["build_id"]:
         raise Refusal("Media and payload build IDs differ")
     print("Verifying compressed payload; no target writes yet...")
@@ -377,8 +522,11 @@ def main(*, check_tools_only=False):
     if sha256_file(image) != manifest["compressed_sha256"]:
         raise Refusal("Compressed payload SHA256 mismatch")
     sp.run(["zstd", "--test", "--", str(image)], check=True)
+    installation_stage("Discovering and selecting target disk")
     selected = select_disk(discover(manifest["raw_bytes"]))
+    installation_stage("Waiting for disk erasure confirmation", disk=selected["path"])
     confirm(selected)  # The ONLY destructive confirmation. Nothing above writes a target.
+    installation_stage("Revalidating and opening confirmed target disk")
     revalidate(selected, manifest["raw_bytes"])
     fd = os.open(selected["path"], os.O_RDWR | os.O_EXCL | os.O_CLOEXEC)
     try:
@@ -386,15 +534,22 @@ def main(*, check_tools_only=False):
         if not stat.S_ISBLK(device.st_mode) or f"{os.major(device.st_rdev)}:{os.minor(device.st_rdev)}" != selected["maj:min"]:
             raise Refusal("Opened device is not the confirmed disk")
         revalidate(selected, manifest["raw_bytes"])
+        installation_stage("Clearing old filesystem and RAID signatures", writes_started=True)
         wipe_old_signatures(fd, selected, manifest["raw_bytes"])
+        installation_stage("Writing and verifying system image")
         write_image(fd, image, manifest["raw_bytes"], manifest["raw_sha256"])
     finally:
         os.close(fd)
     # The raw image now contains its own partitions, but the whole-device identity must persist.
     if disk_identity(selected) != selected["identity"]:
         raise Refusal("Target identity changed during write")
+    installation_stage("Finalizing installed system")
+    finalize_env = {**os.environ, "UBUNTU_CUSTOMIZER_WRITE_VERIFIED": "1"}
+    if SESSION is not None:
+        finalize_env.update(UBUNTU_CUSTOMIZER_STAGE_FILE=str(SESSION.stage_path),
+                            UBUNTU_CUSTOMIZER_ERROR_FILE=str(SESSION.command_path))
     sp.run(["bash", "/usr/local/lib/ubuntu-customizer/finalize.sh", selected["path"], manifest["build_id"]],
-           env={**os.environ, "UBUNTU_CUSTOMIZER_WRITE_VERIFIED": "1"}, check=True)
+           env=finalize_env, check=True)
     interaction_panel("[SUCCESS] INSTALLATION COMPLETE", [
         f"  Installed disk : {selected['path']}",
         f"  Build ID       : {manifest['build_id']}",
@@ -418,13 +573,37 @@ def main(*, check_tools_only=False):
     ], color="32")
 
 
+def run_installer():
+    global SESSION
+    try:
+        SESSION = InstallationReport()
+        sys.stdout.reconfigure(line_buffering=True)
+        error = None
+        with SESSION.capture():
+            print(f"Installation log: {SESSION.log_path}", flush=True)
+            try:
+                main()
+            except (Exception, KeyboardInterrupt) as caught:
+                error = caught
+        if SESSION.capture_error is not None:
+            print(f"Installation log write failed: {SESSION.capture_error}", file=sys.stderr)
+        if error is not None:
+            with SESSION.log_path.open("a", encoding="utf-8") as log:
+                traceback.print_exception(type(error), error, error.__traceback__, file=log)
+            SESSION.failure(error)
+            return 1
+        return 0
+    except (Exception, KeyboardInterrupt) as error:
+        print(f"INSTALLATION STOPPED: {type(error).__name__}: {error}", file=sys.stderr)
+        print("Error reporting could not complete. Installation is not confirmed; do not reboot until disks are unmounted.", file=sys.stderr)
+        return 1
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check-tools", action="store_true", help="Check Live tool availability only; do not access disks")
     args = parser.parse_args()
-    try:
-        main(check_tools_only=args.check_tools)
-    except (Exception, KeyboardInterrupt) as error:
-        print("\nINSTALLATION STOPPED: " + str(error), file=sys.stderr)
-        print("No success is claimed. If writing started, the selected disk may be incomplete.", file=sys.stderr)
-        sys.exit(1)
+    if args.check_tools:
+        main(check_tools_only=True)
+    else:
+        sys.exit(run_installer())

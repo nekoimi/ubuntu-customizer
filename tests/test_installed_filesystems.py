@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,6 +50,51 @@ blkid() {
         for options in ({"root_uuid": "old"}, {"esp_uuid": "old"}, {"root_type": "btrfs"}, {"esp_status": 8}):
             with self.subTest(options=options):
                 self.assertNotEqual(self.check(**options).returncode, 0)
+
+
+@unittest.skipUnless(BASH, "Bash is required for finalization diagnostics")
+class FinalizationDiagnostics(unittest.TestCase):
+    SETUP = SCRIPT.split("[[ ${UBUNTU_CUSTOMIZER_WRITE_VERIFIED", 1)[0]
+
+    def test_command_and_pipeline_failures_report_stage_and_preserve_exit_code(self):
+        for command, status in (("false", 1), ("(exit 7) | cat", 7),
+                                ("probe() { return 9; }; probe", 9)):
+            with self.subTest(command=command):
+                result = subprocess.run([BASH, "-s"], input=self.SETUP +
+                                        "\nfinalize_stage='Test partition refresh'\n" + command +
+                                        "\necho SHOULD_NOT_RUN\n", text=True, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, status)
+                self.assertIn("Finalization failed: Test partition refresh", result.stderr)
+                self.assertIn(f"exit {status}", result.stderr)
+                self.assertNotIn("SHOULD_NOT_RUN", result.stdout)
+
+    def test_corrected_e2fsck_status_is_accepted_and_fatal_status_stops_resize(self):
+        check = SCRIPT.split("check_status=0\n", 1)[1].split('resize2fs "$root"', 1)[0]
+        for status in (0, 1, 2, 4, 8):
+            with self.subTest(status=status):
+                result = subprocess.run([BASH, "-s"], input=self.SETUP +
+                                        f"\nroot=/dev/test-root\ne2fsck() {{ return {status}; }}\n" +
+                                        "check_status=0\n" + check + "echo RESIZE_ALLOWED\n",
+                                        text=True, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, 0 if status <= 1 else status)
+                self.assertEqual("RESIZE_ALLOWED" in result.stdout, status <= 1)
+                if status > 1:
+                    self.assertIn("Root filesystem check failed", result.stderr)
+
+    def test_explicit_exit_and_shell_errors_save_stage_and_command_for_python_report(self):
+        for command, status in (("exit 4", 4), ("false", 1)):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as folder:
+                stage_file = Path(folder) / "stage.txt"
+                error_file = Path(folder) / "error.txt"
+                env = {**os.environ, "UBUNTU_CUSTOMIZER_STAGE_FILE": stage_file.as_posix(),
+                       "UBUNTU_CUSTOMIZER_ERROR_FILE": error_file.as_posix()}
+                result = subprocess.run([BASH, "-s"], input=self.SETUP +
+                                        "\nfinalize_stage='Partition check'\nreport_stage\n" + command,
+                                        env=env, text=True, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, status, result.stderr)
+                self.assertEqual(stage_file.read_text().strip(), "Partition check")
+                self.assertIn(f"exit {status}", error_file.read_text())
+                self.assertIn(command, error_file.read_text())
 
 
 if __name__ == "__main__":

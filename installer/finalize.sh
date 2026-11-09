@@ -1,6 +1,40 @@
 #!/usr/bin/env bash
 # Runs in Alpine only, AFTER explicit confirmation, write and readback.
-set -euo pipefail
+set -Eeuo pipefail
+finalize_stage='Checking finalization prerequisites'
+finalize_error_reported=0
+report_stage() {
+    echo "$finalize_stage"
+    if [[ -n ${UBUNTU_CUSTOMIZER_STAGE_FILE:-} ]]; then
+        printf '%s\n' "$finalize_stage" > "$UBUNTU_CUSTOMIZER_STAGE_FILE"
+    fi
+}
+record_error() {
+    local status=$1 line=$2 command=$3
+    finalize_error_reported=1
+    printf 'Finalization failed: %s (line %s, exit %s): %s\n' "$finalize_stage" "$line" "$status" "$command" >&2
+    if [[ -n ${UBUNTU_CUSTOMIZER_ERROR_FILE:-} ]]; then
+        printf 'line %s, exit %s: %s\n' "$line" "$status" "$command" >> "$UBUNTU_CUSTOMIZER_ERROR_FILE" || true
+    fi
+}
+finalize_error() {
+    local status=$1 line=$2 command=$3
+    record_error "$status" "$line" "$command"
+    exit "$status"
+}
+finalize_exit() {
+    local status=$1 line=$2 command=$3
+    if ((status != 0 && finalize_error_reported == 0)); then
+        record_error "$status" "$line" "$command"
+    fi
+    if [[ ${cleanup_ready:-0} == 1 ]]; then
+        cleanup || true
+    fi
+    exit "$status"
+}
+trap 'finalize_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
+trap 'finalize_exit "$?" "$LINENO" "$BASH_COMMAND"' EXIT
+report_stage
 [[ ${UBUNTU_CUSTOMIZER_WRITE_VERIFIED:-} == 1 && -f /etc/alpine-release && -s /media/installer/UBUNTU_CUSTOMIZER_MEDIA ]] || {
     echo 'Finalization is only available after the Live installer verifies its disk write.' >&2
     exit 1
@@ -19,22 +53,39 @@ cleanup() {
     done
     return "$failed"
 }
-trap 'cleanup || true' EXIT
+cleanup_ready=1
+finalize_stage='Repairing GPT and randomizing partition GUIDs'
+report_stage
 sgdisk --move-second-header --randomize-guids "$disk"
+finalize_stage='Expanding root partition to target disk size'
+report_stage
 parted --script "$disk" resizepart 3 100%
+finalize_stage='Refreshing kernel partition table'
+report_stage
 partprobe "$disk"
+finalize_stage='Locating root and EFI partition devices'
+report_stage
 partition() {
     lsblk --noheadings --raw --paths --output PATH,PARTN "$disk" | awk -v n="$1" '$2 == n { print $1 }'
 }
 root=$(partition 3)
 esp=$(partition 2)
-[[ -b $root && -b $esp ]]
-set +e
-e2fsck -f -p "$root"
-check_status=$?
-set -e
-((check_status <= 1)) || exit "$check_status"
+if [[ ! -b $root || ! -b $esp ]]; then
+    printf 'Missing or invalid partition devices: root=%q EFI=%q\n' "$root" "$esp" >&2
+    lsblk --paths --output NAME,TYPE,SIZE,PARTN "$disk" >&2 || true
+    exit 1
+fi
+finalize_stage='Checking and expanding ext4 filesystem'
+report_stage
+check_status=0
+e2fsck -f -p "$root" || check_status=$?
+if ((check_status > 1)); then
+    printf 'Root filesystem check failed: %s (e2fsck exit %s)\n' "$root" "$check_status" >&2
+    exit "$check_status"
+fi
 resize2fs "$root"
+finalize_stage='Generating filesystem identifiers and mounting installed system'
+report_stage
 tune2fs -U random "$root"
 fat_id=$(od -An -N4 -tx4 /dev/urandom | tr -d ' \n')
 fatlabel --volume-id "$esp" "$fat_id"
@@ -53,6 +104,8 @@ mount -t proc proc "$target/proc"
 mounted+=("$target/proc")
 mount -t tmpfs tmpfs "$target/run"
 mounted+=("$target/run")
+finalize_stage='Configuring installed system identity and SSH'
+report_stage
 printf 'UUID=%s / ext4 defaults 0 1\nUUID=%s /boot/efi vfat umask=0077 0 2\n/swapfile none swap sw 0 0\n' "$root_uuid" "$esp_uuid" > "$target/etc/fstab"
 machine_id=$(tr -d '-' < /proc/sys/kernel/random/uuid)
 printf '%s\n' "$machine_id" > "$target/etc/machine-id"
@@ -68,12 +121,15 @@ chroot "$target" ssh-keygen -A
 chroot "$target" mkswap /swapfile
 mkdir -p "$target/run/sshd"
 chroot "$target" /usr/sbin/sshd -t
+finalize_stage='Generating initramfs and installing BIOS / UEFI bootloaders'
+report_stage
 chroot "$target" update-initramfs -u -k all
 chroot "$target" grub-install --target=i386-pc --recheck "$disk"
 chroot "$target" grub-install --target=x86_64-efi --efi-directory=/boot/efi \
     --removable --no-nvram --no-uefi-secure-boot --recheck
 chroot "$target" update-grub
-echo 'Checking root and EFI filesystem detection using installed Ubuntu tools'
+finalize_stage='Checking root and EFI filesystem detection using installed Ubuntu tools'
+report_stage
 # Alpine and the installed Ubuntu can ship different libblkid versions and
 # detect different signatures. Test with Ubuntu's own probe before claiming
 # success; a successful ext4 mount alone does not prove UUID discovery works.
@@ -96,6 +152,8 @@ if ! grep -qx 'TYPE=vfat' <<< "$esp_probe" || ! grep -Fxq "UUID=$4" <<< "$esp_pr
     exit 1
 fi
 FILESYSTEM_CHECK
+finalize_stage='Recording installation and unmounting target filesystems'
+report_stage
 printf 'build_id=%s\ninstalled_at=%s\n' "$build_id" "$(date -u +%FT%TZ)" > "$target/var/lib/ubuntu-customizer/installation"
 sync
 cleanup
