@@ -7,6 +7,13 @@ trap 'printf "Guest customization failed (shell line %s, exit code %s): %s\n" "$
     exit 1
 }
 export DEBIAN_FRONTEND=noninteractive
+cat > /etc/apt/apt.conf.d/99-customizer-build-downloads <<'EOF'
+APT::Keep-Downloaded-Packages "true";
+Binary::apt::APT::Keep-Downloaded-Packages "true";
+Acquire::Retries "3";
+Acquire::http::Timeout "30";
+Acquire::https::Timeout "30";
+EOF
 [[ $(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release) == noble ]]
 install -d /etc/apt/keyrings /etc/apt/preferences.d /etc/ssh/sshd_config.d
 rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources

@@ -11,5 +11,6 @@
   "compression_threads": 4,
   "work_dir": "/srv/ubuntu-customizer/work",
   "release_dir": "/srv/ubuntu-customizer/releases",
+  "cache_dir": "/srv/ubuntu-customizer/cache",
   "minimum_build_free_gib": 80
 }

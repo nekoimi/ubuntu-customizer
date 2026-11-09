@@ -18,6 +18,8 @@ bash build.sh build
 
 GitHub 下载失败时，可先运行 `bash build.sh check-downloads`，使用相同的 `.env` / 环境代理实际下载并核验 uv、v2rayA；不构建磁盘镜像，也不发送通知。日志会显示代理配置是否启用、GitHub 的配置路由及失败 HTTP 状态码，不显示代理凭据。
 
+重复构建会复用 `/srv/ubuntu-customizer/cache/apt/archives` 中的 Ubuntu / Docker / Tailscale `.deb` 软件包，减少下载量；仓库索引仍刷新并验证签名。缓存目录由 `config/build.json` 的 `cache_dir` 配置，设为 `null` 可禁用。首次下载速度仍取决于镜像站和构建代理。
+
 入口在需要时自动调用 sudo。构建编号默认自动生成，ISO 保存到 `/srv/ubuntu-customizer/releases/<build-id>/ubuntu-custom-server.iso`，终端会显示实际路径。`bash build.sh test` 可运行安全测试和静态检查，`bash build.sh --help` 查看用法。
 
 终端显示主要步骤的开始、完成和耗时；长时间运行时每 30 秒提示当前步骤仍在执行。详细下载、安装输出保存在终端提示的 `tools.log`，可在另一个终端用 `sudo tail -f <日志路径>` 查看。

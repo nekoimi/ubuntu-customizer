@@ -51,6 +51,19 @@ def alpine_mirrors(config):
     return mirrors
 
 
+def package_cache_directory(config):
+    value = config.get("cache_dir", str(Path(config["work_dir"]).parent / "cache"))
+    if value is None:
+        return None
+    if not isinstance(value, str) or not Path(value).is_absolute():
+        raise ValueError("cache_dir must be an absolute directory path, or null to disable caching")
+    cache = Path(value).resolve()
+    for other in (Path("/"), REPO, Path(config["work_dir"]).resolve(), Path(config["release_dir"]).resolve()):
+        if cache == other or (other != Path("/") and (cache in other.parents or other in cache.parents)):
+            raise ValueError("cache_dir must be separate from checkout, work and release directories")
+    return cache
+
+
 def check_build_isolation():
     for namespace in ("mnt", "pid", "uts", "ipc"):
         original = os.environ.get("UBUNTU_CUSTOMIZER_HOST_" + namespace.upper())
@@ -150,6 +163,7 @@ def check_host(config):
     available = next(int(line.split()[1]) * 1024 for line in Path("/proc/meminfo").read_text().splitlines() if line.startswith("MemAvailable:"))
     if available < 4 * GIB:
         raise RuntimeError("At least 4 GiB currently available build memory required")
+    package_cache_directory(config)
     paths = []
     minimum_free = config["minimum_build_free_gib"]
     if type(minimum_free) is not int or not 40 <= minimum_free <= 1024:
@@ -195,6 +209,7 @@ class Build:
             raise ValueError("Absolute persistent paths required")
         self.work_base = Path(self.config["work_dir"]).resolve()
         self.release_base = Path(self.config["release_dir"]).resolve()
+        self.cache_base = package_cache_directory(self.config)
         for path in (self.work_base, self.release_base):
             if not path.is_absolute() or path == Path("/") or path == REPO or REPO in path.parents:
                 raise ValueError("Use persistent work/release directories outside the checkout")
@@ -307,6 +322,10 @@ class Build:
             path.mkdir(parents=True, exist_ok=True)
         self.lock = (self.work_base / ".build.lock").open("w")
         fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if self.cache_base is not None:
+            self.cache_base.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self.cache_lock = (self.cache_base / ".cache.lock").open("a")
+            fcntl.flock(self.cache_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         self.work.mkdir(mode=0o700)
         self.release.mkdir(mode=0o755)
         self.owns_release = True
@@ -320,6 +339,40 @@ class Build:
         for line in proxy_summary(self.proxy_env):
             self.note(line)
         self.checks["preflight"] = "passed"
+
+    def package_cache(self):
+        if self.cache_base is None:
+            return None
+        cache = self.cache_base / "apt/archives"
+        cache.mkdir(parents=True, exist_ok=True)
+        packages = list(cache.glob("*.deb"))
+        size = sum(path.stat().st_size for path in packages)
+        self.note(f"Persistent APT cache: {len(packages)} packages, {size / GIB:.2f} GiB; signed repository metadata still refreshed")
+        return cache
+
+    def clean_ubuntu(self, root, cache_mount_count):
+        # Never apt-get clean a bind-mounted persistent package cache.
+        self.unmount_to(cache_mount_count)
+        self.guest(root, """rm -f /etc/apt/apt.conf.d/99-customizer-build-downloads
+apt-get clean
+rm -rf /tmp/customizer /root/.cache /root/.ssh /home/ubuntu/.cache /home/ubuntu/.ssh /var/lib/tailscale /var/lib/docker /var/lib/containerd
+rm -f /etc/ssh/ssh_host_* /var/lib/systemd/random-seed /root/.bash_history /home/ubuntu/.bash_history
+find /var/log -type f -exec truncate -s 0 {} +
+find /var/lib/apt/lists -type f ! -name lock -delete
+rm -f /etc/machine-id /var/lib/dbus/machine-id
+: > /etc/machine-id
+ln -s /etc/machine-id /var/lib/dbus/machine-id
+rm -f /etc/resolv.conf
+ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+""")
+
+    def bootstrap_ubuntu(self, root, apt_cache):
+        # Jammy's generic Ubuntu script also supports noble on a 22.04 host.
+        script = "/usr/share/debootstrap/scripts/gutsy"
+        cache_options = ["--cache-dir=" + str(apt_cache)] if apt_cache else []
+        self.run(["debootstrap", *cache_options, "--arch=amd64", "--merged-usr", "--variant=minbase",
+                  "--keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg", "noble", root,
+                  self.config["ubuntu_mirror"], script], label="Installing Ubuntu base system (debootstrap)")
 
     def ubuntu(self):
         self.note("Building Ubuntu 24.04 disk image using signed domestic APT repositories")
@@ -335,11 +388,13 @@ class Build:
         self.run(["mkfs.vfat", "-F", "32", "-n", "UBUNTU_EFI", self.loop + "p2"])
         root = self.work / "ubuntu"
         self.mount([self.loop + "p3"], root)
-        # Jammy's debootstrap generic Ubuntu script also supports noble on a 22.04 host.
-        script = "/usr/share/debootstrap/scripts/gutsy"
-        self.run(["debootstrap", "--arch=amd64", "--merged-usr", "--variant=minbase", "--keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg", "noble", root, self.config["ubuntu_mirror"], script], label="Installing Ubuntu base system (debootstrap)")
+        apt_cache = self.package_cache()
+        self.bootstrap_ubuntu(root, apt_cache)
         self.mount([self.loop + "p2"], root / "boot/efi")
         self.api_mounts(root)
+        cache_mount_count = len(self.mounts)
+        if apt_cache:
+            self.mount(["--bind", apt_cache], root / "var/cache/apt/archives")
         tools = root / "tmp/customizer"
         tools.mkdir()
         (tools / "build-root").write_text(self.id + "\n")
@@ -365,17 +420,7 @@ class Build:
         self.details["v2raya"]["core_version"] = self.output(["chroot", root, "v2raya_core", "version"])
         for name in ("packages.txt", "package-origins.txt"):
             shutil.copyfile(root / "var/lib/ubuntu-customizer" / name, self.release / name)
-        self.guest(root, """apt-get clean
-rm -rf /tmp/customizer /root/.cache /root/.ssh /home/ubuntu/.cache /home/ubuntu/.ssh /var/lib/tailscale /var/lib/docker /var/lib/containerd
-rm -f /etc/ssh/ssh_host_* /var/lib/systemd/random-seed /root/.bash_history /home/ubuntu/.bash_history
-find /var/log -type f -exec truncate -s 0 {} +
-find /var/lib/apt/lists -type f ! -name lock -delete
-rm -f /etc/machine-id /var/lib/dbus/machine-id
-: > /etc/machine-id
-ln -s /etc/machine-id /var/lib/dbus/machine-id
-rm -f /etc/resolv.conf
-ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
-""")
+        self.clean_ubuntu(root, cache_mount_count)
         (root / "var/lib/ubuntu-customizer/build-id").write_text(self.id + "\n")
         self.details["kernel"] = sorted(p.name for p in (root / "boot").glob("vmlinuz-*"))
         self.unmount_to(0)
