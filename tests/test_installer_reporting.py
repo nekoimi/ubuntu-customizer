@@ -76,6 +76,8 @@ print("RESTORED")
             self.assertIn("wipefs --no-act -- /dev/nvme0n1p3", log)
             for call in run.call_args_list:
                 self.assertLessEqual(call.kwargs["timeout"], 5)
+                self.assertNotIn("--create-missing", call.args[0])
+            self.assertTrue(any("--diagnose" in call.args[0] for call in run.call_args_list))
 
     def test_probe_stderr_survives_capture_and_reporting_commands_never_erase(self):
         with patch.object(installer.sp, "run", return_value=subprocess.CompletedProcess(

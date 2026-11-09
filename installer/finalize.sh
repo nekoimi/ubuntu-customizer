@@ -67,7 +67,7 @@ finalize_stage='Locating root and EFI partition devices'
 report_stage
 # PARTN can be empty in Alpine/mdev without a populated udev database.
 # Read kernel partition numbers and verify device major/minor identities.
-partition_devices=$(python3 /usr/local/lib/ubuntu-customizer/partition_devices.py "$disk")
+partition_devices=$(python3 /usr/local/lib/ubuntu-customizer/partition_devices.py --create-missing "$disk")
 mapfile -t partitions <<< "$partition_devices"
 root=${partitions[0]:-}
 esp=${partitions[1]:-}

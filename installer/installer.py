@@ -92,9 +92,11 @@ class InstallationReport:
 
     def diagnostics(self):
         commands = [["lsblk", "--paths", "--output", "NAME,TYPE,SIZE,PARTN,FSTYPE,UUID,MOUNTPOINTS"],
+                    ["cat", "/proc/partitions"], ["ls", "-l", "/sys/class/block"],
                     ["findmnt"], ["dmesg"]]
         if self.disk:
             commands.insert(1, ["parted", "--script", self.disk, "unit", "s", "print"])
+            commands.insert(2, ["python3", str(Path(__file__).with_name("partition_devices.py")), "--diagnose", self.disk])
         with self.log_path.open("a", encoding="utf-8") as log:
             log.write("\n=== Automatic read-only diagnostics ===\n")
             for command in commands:
