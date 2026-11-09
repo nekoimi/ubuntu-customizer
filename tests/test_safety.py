@@ -295,6 +295,17 @@ class ConfigurationSafety(unittest.TestCase):
 
 
 class WriteGateSafety(unittest.TestCase):
+    def test_missing_partition_helper_refuses_before_disk_discovery_or_writes(self):
+        with patch.object(installer.os, "geteuid", return_value=0, create=True), \
+                patch.object(installer.shutil, "which", return_value="/usr/bin/tool"), \
+                patch.object(installer.Path, "is_file", return_value=False), \
+                patch.object(installer, "discover") as discover, \
+                patch.object(installer.os, "open") as open_target:
+            with self.assertRaisesRegex(installer.Refusal, "Missing partition discovery helper"):
+                installer.main()
+            discover.assert_not_called()
+            open_target.assert_not_called()
+
     def test_missing_live_tool_refuses_before_media_selection_or_target_open(self):
         with patch.object(installer.os, "geteuid", return_value=0, create=True), \
                 patch.object(installer.shutil, "which", side_effect=lambda tool: None if tool == "sgdisk" else "/usr/bin/" + tool), \

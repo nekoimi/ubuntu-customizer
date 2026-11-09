@@ -96,6 +96,31 @@ class FinalizationDiagnostics(unittest.TestCase):
                 self.assertIn(f"exit {status}", error_file.read_text())
                 self.assertIn(command, error_file.read_text())
 
+    def test_new_uuids_are_probed_without_cache_and_missing_values_stop_before_mount(self):
+        check = SCRIPT.split('root_uuid=$(blkid -p', 1)[1].split('mount "$root" "$target"', 1)[0]
+        check = 'root_uuid=$(blkid -p' + check
+        stub = r'''
+root=/dev/test-root
+esp=/dev/test-esp
+blkid() {
+    [[ $1 == -p && $2 == -s && $3 == UUID && $4 == -o && $5 == value ]] || return 99
+    if [[ $6 == "$root" ]]; then
+        printf '%s\n' "$TEST_ROOT_UUID"
+    else
+        printf '%s\n' "$TEST_ESP_UUID"
+    fi
+}
+'''
+        for root_uuid, esp_uuid, passes in (("12345678-1234-4321-9876-123456789abc", "ABCD-1234", True),
+                                            ("", "ABCD-1234", False),
+                                            ("12345678-1234-4321-9876-123456789abc", "", False)):
+            with self.subTest(root_uuid=root_uuid, esp_uuid=esp_uuid):
+                result = subprocess.run([BASH, "-s"], input=self.SETUP + stub + check + "echo MOUNT_ALLOWED\n",
+                                        env={**os.environ, "TEST_ROOT_UUID": root_uuid, "TEST_ESP_UUID": esp_uuid},
+                                        text=True, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode == 0, passes, result.stderr)
+                self.assertEqual("MOUNT_ALLOWED" in result.stdout, passes)
+
 
 if __name__ == "__main__":
     unittest.main()

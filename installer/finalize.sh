@@ -65,23 +65,25 @@ report_stage
 partprobe "$disk"
 finalize_stage='Locating root and EFI partition devices'
 report_stage
-partition() {
-    lsblk --noheadings --raw --paths --output PATH,PARTN "$disk" | awk -v n="$1" '$2 == n { print $1 }'
-}
-root=$(partition 3)
-esp=$(partition 2)
+# PARTN can be empty in Alpine/mdev without a populated udev database.
+# Read kernel partition numbers and verify device major/minor identities.
+partition_devices=$(python3 /usr/local/lib/ubuntu-customizer/partition_devices.py "$disk")
+mapfile -t partitions <<< "$partition_devices"
+root=${partitions[0]:-}
+esp=${partitions[1]:-}
 if [[ ! -b $root || ! -b $esp ]]; then
     printf 'Missing or invalid partition devices: root=%q EFI=%q\n' "$root" "$esp" >&2
     lsblk --paths --output NAME,TYPE,SIZE,PARTN "$disk" >&2 || true
-    exit 1
+    finalize_error 1 "$LINENO" 'Verify root and EFI partition device nodes'
 fi
+printf 'Verified target partitions: root=%s EFI=%s\n' "$root" "$esp"
 finalize_stage='Checking and expanding ext4 filesystem'
 report_stage
 check_status=0
 e2fsck -f -p "$root" || check_status=$?
 if ((check_status > 1)); then
     printf 'Root filesystem check failed: %s (e2fsck exit %s)\n' "$root" "$check_status" >&2
-    exit "$check_status"
+    finalize_error "$check_status" "$LINENO" "e2fsck -f -p $root"
 fi
 resize2fs "$root"
 finalize_stage='Generating filesystem identifiers and mounting installed system'
@@ -89,8 +91,13 @@ report_stage
 tune2fs -U random "$root"
 fat_id=$(od -An -N4 -tx4 /dev/urandom | tr -d ' \n')
 fatlabel --volume-id "$esp" "$fat_id"
-root_uuid=$(blkid -s UUID -o value "$root")
-esp_uuid=$(blkid -s UUID -o value "$esp")
+# UUIDs have just changed. Probe the devices directly rather than relying on
+# blkid/udev caches populated before tune2fs and fatlabel.
+root_uuid=$(blkid -p -s UUID -o value "$root")
+esp_uuid=$(blkid -p -s UUID -o value "$esp")
+if [[ ! $root_uuid =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ || ! $esp_uuid =~ ^[0-9a-fA-F]{4}-[0-9a-fA-F]{4}$ ]]; then
+    finalize_error 1 "$LINENO" 'Validate freshly generated ext4 and FAT UUIDs'
+fi
 mount "$root" "$target"
 mounted+=("$target")
 mount "$esp" "$target/boot/efi"

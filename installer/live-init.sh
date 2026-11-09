@@ -9,7 +9,7 @@ rescue() {
 mount -t devtmpfs devtmpfs /dev || rescue devtmpfs
 mount -t proc proc /proc || rescue proc
 mount -t sysfs sysfs /sys || rescue sysfs
-for module in loop isofs squashfs sd_mod sr_mod usb_storage uas xhci_pci ehci_pci ahci ata_piix nvme virtio_pci virtio_blk virtio_scsi megaraid_sas mpt3sas; do
+for module in loop isofs squashfs sd_mod sr_mod usb_storage uas xhci_pci ehci_pci ahci ata_piix vmd nvme mmc_block sdhci_pci virtio_pci virtio_blk virtio_scsi megaraid_sas mpt3sas; do
     modprobe "$module" 2>/dev/null || true
 done
 echo 'Looking for Ubuntu Customizer installation media...'

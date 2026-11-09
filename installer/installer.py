@@ -24,7 +24,7 @@ PAYLOAD = MEDIA / "payload"
 SESSION = None
 # Includes tools used by finalize.sh outside the Ubuntu chroot, where missing
 # Alpine subpackages would otherwise be discovered only AFTER overwriting a disk.
-LIVE_TOOLS = ("bash", "zstd", "lsblk", "findmnt", "wipefs", "sgdisk", "parted", "partprobe",
+LIVE_TOOLS = ("bash", "python3", "zstd", "lsblk", "findmnt", "wipefs", "sgdisk", "parted", "partprobe",
               "e2fsck", "resize2fs", "tune2fs", "fatlabel", "blkid", "mount", "umount",
               "chroot", "awk", "od", "tr", "mkdir", "install", "dd", "chmod", "date", "sync")
 
@@ -165,6 +165,8 @@ def check_live_tools():
     missing = [tool for tool in LIVE_TOOLS if not shutil.which(tool)]
     if missing:
         raise Refusal("Missing Alpine Live tools: " + ", ".join(missing) + "; rebuild the installer ISO. No target disk has been written.")
+    if not Path(__file__).with_name("partition_devices.py").is_file():
+        raise Refusal("Missing partition discovery helper; rebuild the installer ISO. No target disk has been written.")
 
 
 def output(*args):

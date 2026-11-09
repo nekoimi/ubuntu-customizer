@@ -13,6 +13,7 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess as sp
 import sys
 import tarfile
@@ -65,6 +66,23 @@ def digest(path):
         for chunk in iter(lambda: stream.read(8 * 1024 ** 2), b""):
             value.update(chunk)
     return value.hexdigest()
+
+
+def wait_loop_partitions(loop, timeout=10):
+    """Wait for both image partitions before running any formatter."""
+    deadline = time.monotonic() + timeout
+    while True:
+        ready = True
+        for number in (2, 3):
+            try:
+                ready = stat.S_ISBLK(Path(loop + f"p{number}").stat().st_mode) and ready
+            except FileNotFoundError:
+                ready = False
+        if ready:
+            return
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"Loop EFI/root partition devices did not become ready: {loop}p2, {loop}p3")
+        time.sleep(0.1)
 
 
 def download(url, destination, expected=None):
@@ -312,10 +330,7 @@ class Build:
         self.loop = self.output(["losetup", "--find", "--show", "--partscan", raw])
         if not re.fullmatch(r"/dev/loop[0-9]+", self.loop):
             raise RuntimeError("Unexpected loop device")
-        for _ in range(50):
-            if Path(self.loop + "p3").exists():
-                break
-            time.sleep(.1)
+        wait_loop_partitions(self.loop)
         self.run(["mkfs.ext4", "-F", "-m", "0", "-L", "ubuntu-root", self.loop + "p3"])
         self.run(["mkfs.vfat", "-F", "32", "-n", "UBUNTU_EFI", self.loop + "p2"])
         root = self.work / "ubuntu"
@@ -341,8 +356,8 @@ class Build:
             "DOCKER_MIRROR": self.config["docker_mirror"], "PYTHON_INDEX": self.config["python_index"]},
             label="Installing packages and configuring Ubuntu, Docker, Tailscale and v2rayA")
         self.run(["chroot", root, "chpasswd", "--encrypted"], input=("ubuntu:" + self.password_hash + "\n").encode())
-        root_uuid = self.output(["blkid", "-s", "UUID", "-o", "value", self.loop + "p3"])
-        esp_uuid = self.output(["blkid", "-s", "UUID", "-o", "value", self.loop + "p2"])
+        root_uuid = self.output(["blkid", "-p", "-s", "UUID", "-o", "value", self.loop + "p3"])
+        esp_uuid = self.output(["blkid", "-p", "-s", "UUID", "-o", "value", self.loop + "p2"])
         (root / "etc/fstab").write_text(f"UUID={root_uuid} / ext4 defaults 0 1\nUUID={esp_uuid} /boot/efi vfat umask=0077 0 2\n/swapfile none swap sw 0 0\n")
         self.guest(root, "update-initramfs -u -k all\ngrub-install --target=i386-pc --recheck " + self.loop + "\ngrub-install --target=x86_64-efi --efi-directory=/boot/efi --removable --no-nvram --no-uefi-secure-boot\nupdate-grub\n", label="Generating initramfs and installing BIOS / UEFI bootloaders")
         self.guest(root, (REPO / "scripts/check-guest.sh").read_text(), label="Checking Ubuntu packages and configuration")
@@ -481,7 +496,7 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
         apk_mirror = self.install_alpine_packages(root, branch)
         library = root / "usr/local/lib/ubuntu-customizer"
         library.mkdir(parents=True)
-        for name in ("installer.py", "finalize.sh"):
+        for name in ("installer.py", "finalize.sh", "partition_devices.py"):
             shutil.copyfile(REPO / "installer" / name, library / name)
         self.run(["chroot", root, "/usr/bin/env", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                   "python3", "/usr/local/lib/ubuntu-customizer/installer.py", "--check-tools"],
