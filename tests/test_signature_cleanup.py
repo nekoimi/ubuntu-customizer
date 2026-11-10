@@ -91,8 +91,8 @@ class SignatureCleanup(unittest.TestCase):
         manifest = {"format": 1, "architecture": "amd64", "sector_size": 512, "root_partition": 3,
                     "esp_partition": 2, "raw_bytes": 1024, "raw_sha256": "0" * 64,
                     "compressed_sha256": "0" * 64, "build_id": "test"}
-        for cancel in (False, True):
-            with self.subTest(cancel=cancel), tempfile.TemporaryDirectory() as folder:
+        for cancel, fail_tail in ((False, False), (True, False), (False, True)):
+            with self.subTest(cancel=cancel, fail_tail=fail_tail), tempfile.TemporaryDirectory() as folder:
                 media = Path(folder)
                 payload = media / "payload"
                 payload.mkdir()
@@ -103,27 +103,156 @@ class SignatureCleanup(unittest.TestCase):
                     steps.append("confirm")
                     if cancel:
                         raise installer.Refusal("cancelled")
+                def clear_tail(*args):
+                    steps.append("tail")
+                    if fail_tail:
+                        raise OSError("disk-tail write failed")
                 with patch.multiple(installer, MEDIA=media, PAYLOAD=payload, check_live_tools=Mock(), welcome=Mock(),
                                     sha256_file=Mock(return_value="0" * 64), discover=Mock(return_value=[DISK]),
                                     select_disk=Mock(return_value=DISK), confirm=Mock(side_effect=confirm), revalidate=Mock(),
                                     wipe_old_signatures=Mock(side_effect=lambda *args: steps.append("wipe")),
                                     write_image=Mock(side_effect=lambda *args: steps.append("write")),
+                                    clear_unwritten_tail=Mock(side_effect=clear_tail),
                                     disk_identity=Mock(return_value=DISK["identity"]), interaction_panel=Mock()), \
                         patch.multiple(installer.os, create=True, O_CLOEXEC=0x80000, geteuid=Mock(return_value=0), open=Mock(return_value=7),
                                        close=Mock(), fstat=Mock(return_value=SimpleNamespace(st_mode=stat.S_IFBLK, st_rdev=0)),
                                        major=Mock(return_value=8), minor=Mock(return_value=0)), \
-                        patch.object(installer.sp, "run"):
+                        patch.object(installer.sp, "run") as run:
                     if cancel:
                         with self.assertRaises(installer.Refusal):
                             installer.main()
+                    elif fail_tail:
+                        with self.assertRaisesRegex(OSError, "disk-tail write failed"):
+                            installer.main()
                     else:
                         installer.main()
-                self.assertEqual(steps, ["confirm"] if cancel else ["confirm", "wipe", "write"])
+                finalized = any(call.args[0][0] == "bash" for call in run.call_args_list)
+                self.assertEqual(finalized, not cancel and not fail_tail)
+                self.assertEqual(steps, ["confirm"] if cancel else ["confirm", "wipe", "write", "tail"])
 
 
-@unittest.skipUnless(sys.platform == "linux" and all(shutil.which(tool) for tool in ("mkfs.ext4", "wipefs", "blkid")),
+class UnwrittenTailCleanup(unittest.TestCase):
+    def exercise(self, target, raw_bytes, *, selected_size=None, device_matches=True, flush_error=False,
+                 identity_changed=False):
+        selected = {**DISK, "size": target.stat().st_size if selected_size is None else selected_size}
+        ioctl = Mock(side_effect=OSError("cache invalidation failed") if flush_error else None)
+        with target.open("r+b", buffering=0) as stream, \
+                patch.object(installer, "revalidate", side_effect=installer.Refusal("target changed") if identity_changed else None), \
+                patch.object(installer.os, "fstat", return_value=SimpleNamespace(st_mode=stat.S_IFBLK, st_rdev=0)), \
+                patch.object(installer.os, "major", return_value=8 if device_matches else 9, create=True), \
+                patch.object(installer.os, "minor", return_value=0, create=True), \
+                patch.dict(sys.modules, {"fcntl": SimpleNamespace(ioctl=ioctl)}), \
+                patch.object(installer.sys, "stdout", io.StringIO()):
+            installer.clear_unwritten_tail(stream.fileno(), selected, raw_bytes)
+            ioctl.assert_called_once_with(stream.fileno(), 0x1261)
+
+    def test_tail_is_cleared_without_changing_image_or_unrelated_middle_bytes(self):
+        for image_bytes in (1024 ** 2, 4 * 1024 ** 2, 6 * 1024 ** 2, 7 * 1024 ** 2, 8 * 1024 ** 2):
+            with self.subTest(image_bytes=image_bytes), tempfile.TemporaryDirectory() as folder:
+                target = Path(folder) / "disk.img"
+                before = b"x" * (8 * 1024 ** 2)
+                target.write_bytes(before)
+                self.exercise(target, image_bytes)
+                after = target.read_bytes()
+                start = max(image_bytes, len(before) - 4 * 1024 ** 2)
+                self.assertEqual(after[:start], before[:start])
+                self.assertEqual(after[start:], bytes(len(before) - start))
+                self.assertEqual(target.stat().st_size, len(before))
+
+    def test_wrong_device_or_changed_size_or_invalid_image_never_writes(self):
+        for options in ({"device_matches": False}, {"selected_size": 2048},
+                        {"raw_bytes": 0}, {"raw_bytes": 8192}):
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as folder:
+                target = Path(folder) / "disk.img"
+                target.write_bytes(b"x" * 4096)
+                with self.assertRaises(installer.Refusal):
+                    self.exercise(target, **{"raw_bytes": 512, **options})
+                self.assertEqual(target.read_bytes(), b"x" * 4096)
+
+    def test_write_failure_or_nonzero_readback_refuses(self):
+        for operation, result in (("write", 0), ("read", b"x"), ("read", b"")):
+            with self.subTest(operation=operation, result=result), tempfile.TemporaryDirectory() as folder:
+                target = Path(folder) / "disk.img"
+                target.write_bytes(b"x" * 4096)
+                with patch.object(installer.os, operation, return_value=result), \
+                        self.assertRaises((OSError, installer.Refusal)):
+                    self.exercise(target, 512)
+
+    def test_short_writes_are_completed(self):
+        original_write = os.write
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "disk.img"
+            target.write_bytes(b"x" * 4096)
+            with patch.object(installer.os, "write", side_effect=lambda descriptor, data: original_write(
+                    descriptor, data[:max(1, len(data) // 2)])):
+                self.exercise(target, 512)
+            self.assertEqual(target.read_bytes(), b"x" * 512 + bytes(4096 - 512))
+
+    def test_failed_cache_invalidation_stops_before_readback(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "disk.img"
+            target.write_bytes(b"x" * 4096)
+            with patch.object(installer.os, "read") as read, \
+                    self.assertRaisesRegex(OSError, "cache invalidation failed"):
+                self.exercise(target, 512, flush_error=True)
+            read.assert_not_called()
+
+    def test_lost_disk_identity_stops_before_writes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "disk.img"
+            target.write_bytes(b"x" * 4096)
+            with self.assertRaisesRegex(installer.Refusal, "target changed"):
+                self.exercise(target, 512, identity_changed=True)
+            self.assertEqual(target.read_bytes(), b"x" * 4096)
+
+
+@unittest.skipUnless(sys.platform == "linux" and all(shutil.which(tool) for tool in ("mkfs.ext4", "wipefs", "blkid", "resize2fs")),
                      "Linux filesystem tools required; uses temporary regular files, no root or disks")
 class ZfsTailRegression(unittest.TestCase):
+    def test_missed_zfs_labels_near_future_partition_end_are_cleared_before_ext4_growth(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "disk.img"
+            partition = Path(folder) / "partition.img"
+            total = 64 * 1024 ** 2
+            root_start = 1024 ** 2
+            root_end = total - 33 * 512
+            root_size = root_end - root_start
+            with target.open("wb") as stream:
+                stream.truncate(total)
+                for label in (root_size // (256 * 1024) * (256 * 1024) - 256 * 1024,
+                              root_size // (256 * 1024) * (256 * 1024) - 512 * 1024):
+                    for index in range(8):
+                        stream.seek(root_start + label + 128 * 1024 + index * 1024)
+                        stream.write(struct.pack("<QQ", 0x00bab10c, 5000))
+            with partition.open("wb") as stream:
+                stream.truncate(16 * 1024 ** 2)
+            subprocess.run(["mkfs.ext4", "-F", str(partition)], check=True, capture_output=True)
+            with partition.open("rb") as source, target.open("r+b") as destination:
+                destination.seek(root_start)
+                shutil.copyfileobj(source, destination)
+            original_image = target.read_bytes()[:root_start + partition.stat().st_size]
+
+            def extract_and_probe():
+                with target.open("rb") as source, partition.open("wb") as destination:
+                    source.seek(root_start)
+                    destination.write(source.read(root_size))
+                return subprocess.run(["blkid", "-p", "-o", "export", str(partition)], capture_output=True, text=True)
+
+            before = extract_and_probe()
+            self.assertEqual(before.returncode, 8, before.stdout + before.stderr)
+            signatures = subprocess.check_output(["wipefs", "--no-act", str(partition)], text=True)
+            self.assertIn("zfs_member", signatures)
+            UnwrittenTailCleanup().exercise(target, len(original_image))
+            self.assertEqual(target.read_bytes()[:len(original_image)], original_image)
+            after = extract_and_probe()
+            self.assertEqual(after.returncode, 0, after.stderr)
+            self.assertIn("TYPE=ext4", after.stdout)
+            self.assertNotIn("zfs_member", subprocess.check_output(["wipefs", "--no-act", str(partition)], text=True))
+            subprocess.run(["resize2fs", str(partition)], check=True, capture_output=True)
+            grown = subprocess.run(["blkid", "-p", "-o", "export", str(partition)], capture_output=True, text=True)
+            self.assertEqual(grown.returncode, 0, grown.stderr)
+            self.assertIn("TYPE=ext4", grown.stdout)
+
     def test_old_zfs_tail_is_removed_through_inherited_fd_before_new_ext4_image(self):
         with tempfile.TemporaryDirectory() as folder:
             target = Path(folder) / "test.img"

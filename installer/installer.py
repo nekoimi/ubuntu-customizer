@@ -459,6 +459,38 @@ def wipe_old_signatures(fd, selected, raw_bytes):
     os.lseek(fd, 0, os.SEEK_SET)
 
 
+def clear_unwritten_tail(fd, selected, raw_bytes):
+    """Clear end-of-disk labels outside the verified image before root expansion."""
+    revalidate(selected, raw_bytes)
+    info = os.fstat(fd)
+    if not stat.S_ISBLK(info.st_mode) or f"{os.major(info.st_rdev)}:{os.minor(info.st_rdev)}" != selected["maj:min"]:
+        raise Refusal("Tail cleanup device identity changed")
+    size = os.lseek(fd, 0, os.SEEK_END)
+    if size != int(selected["size"]) or not 0 < raw_bytes <= size:
+        raise Refusal("Tail cleanup disk or image size changed")
+    start = max(raw_bytes, size - 4 * 1024 ** 2)
+    remaining = size - start
+    print(f"Clearing {remaining} bytes of old disk-tail labels at offset {start}, outside the verified image...")
+    os.lseek(fd, start, os.SEEK_SET)
+    zeros = bytes(1024 ** 2)
+    while remaining:
+        count = os.write(fd, zeros[:min(remaining, len(zeros))])
+        if count <= 0:
+            raise OSError("Short disk-tail write")
+        remaining -= count
+    os.fsync(fd)
+    import fcntl
+    fcntl.ioctl(fd, 0x1261)
+    os.lseek(fd, start, os.SEEK_SET)
+    remaining = size - start
+    while remaining:
+        chunk = os.read(fd, min(remaining, len(zeros)))
+        if not chunk or any(chunk):
+            raise Refusal("Disk-tail cleanup readback failed")
+        remaining -= len(chunk)
+    revalidate(selected, raw_bytes)
+
+
 def write_image(fd, image, expected_bytes, expected_hash):
     written = 0
     hasher = hashlib.sha256()
@@ -542,6 +574,8 @@ def main(*, check_tools_only=False):
         wipe_old_signatures(fd, selected, manifest["raw_bytes"])
         installation_stage("Writing and verifying system image")
         write_image(fd, image, manifest["raw_bytes"], manifest["raw_sha256"])
+        installation_stage("Clearing old labels beyond the verified image before root expansion")
+        clear_unwritten_tail(fd, selected, manifest["raw_bytes"])
     finally:
         os.close(fd)
     # The raw image now contains its own partitions, but the whole-device identity must persist.
