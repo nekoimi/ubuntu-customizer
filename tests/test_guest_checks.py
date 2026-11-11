@@ -15,6 +15,23 @@ TMUX_CHECK = SCRIPT.split("<<'TMUX_CHECK'\n", 1)[1].split("\nTMUX_CHECK", 1)[0]
 
 @unittest.skipUnless(BASH, "Bash is required for guest check regressions")
 class GuestConfigurationChecks(unittest.TestCase):
+    def test_missing_disk_command_stops_guest_validation(self):
+        check = next(line for line in SCRIPT.splitlines() if line.startswith("for cmd in "))
+        stub = r'''
+set -euo pipefail
+command() {
+    [[ $1 == -v ]] || return 99
+    [[ $2 != "$TEST_MISSING_COMMAND" ]]
+}
+'''
+        for missing in ("fdisk", "mount", "findmnt", "lsblk", "none"):
+            with self.subTest(missing=missing):
+                result = subprocess.run([BASH, "-s"], input=stub + check + "\necho CHECK_PASSED\n",
+                                        text=True, capture_output=True,
+                                        env={**os.environ, "TEST_MISSING_COMMAND": missing}, timeout=10)
+                self.assertEqual(result.returncode, 0 if missing == "none" else 1, result.stderr)
+                self.assertEqual("CHECK_PASSED" in result.stdout, missing == "none")
+
     def run_checks(self, *, permit_root="no", ssh_status=0, apt_status=0):
         # Everything is a shell stub; no guest or host services/files are modified.
         stub = r'''

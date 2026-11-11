@@ -53,6 +53,7 @@ psmisc
 sysstat
 iotop
 util-linux
+fdisk
 parted
 gdisk
 smartmontools

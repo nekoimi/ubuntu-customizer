@@ -21,7 +21,7 @@ grep -q '(ALL : ALL) ALL' <<< "$sudo_policy"
 if grep -q NOPASSWD <<< "$sudo_policy"; then exit 1; fi
 if dpkg-query -W -f='${db:Status-Status}' snapd 2>/dev/null | grep -qx installed; then exit 1; fi
 [[ $(apt-cache policy snapd | awk '/Candidate:/ {print $2}') == '(none)' ]]
-for cmd in gcc g++ make cmake python3 pip3 uv uvx docker dockerd tailscale v2raya v2raya_core dig ss tcpdump tmux ufw server-info server-update; do command -v "$cmd" >/dev/null; done
+for cmd in gcc g++ make cmake python3 pip3 uv uvx docker dockerd tailscale v2raya v2raya_core dig ss tcpdump tmux ufw fdisk mount findmnt lsblk server-info server-update; do command -v "$cmd" >/dev/null; done
 uv --version
 uvx --version
 runuser -u ubuntu -- docker --version
