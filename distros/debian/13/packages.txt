@@ -1,0 +1,8 @@
+# Debian portable kernel, firmware and utilities
+debian-archive-keyring
+linux-image-amd64
+firmware-linux-free
+firmware-misc-nonfree
+firmware-iwlwifi
+firmware-realtek
+bind9-dnsutils

@@ -1,0 +1,8 @@
+{
+  "distro": "debian",
+  "version": "13",
+  "architecture": "amd64",
+  "account": {"username": "debian"},
+  "disk": {"template_gib": 24, "root_filesystem": "ext4"},
+  "components": ["docker", "tailscale", "v2raya", "development", "maintenance"]
+}

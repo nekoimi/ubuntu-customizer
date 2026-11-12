@@ -1,0 +1,6 @@
+{
+  "system_mirror": "https://mirrors.aliyun.com/ubuntu/",
+  "security_mirror": "https://mirrors.aliyun.com/ubuntu/",
+  "docker_mirror": "https://mirrors.aliyun.com/docker-ce/linux/ubuntu",
+  "python_index": "https://pypi.tuna.tsinghua.edu.cn/simple"
+}

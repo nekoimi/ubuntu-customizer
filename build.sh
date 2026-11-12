@@ -7,7 +7,7 @@ usage() {
 Usage: bash build.sh [command] [options]
 
   setup                 Install build dependencies (uses sudo if needed)
-  check [--config FILE] Check host tools, resources and output paths; no writes
+  check [--profile FILE] Check host tools, resources and output paths; no writes
   check-downloads       Check GitHub downloads with build proxy settings; no ISO build
   test                  Run safety tests and script static checks
   vm-test [options]     Run a file-backed QEMU/KVM installation test (Linux)
@@ -20,8 +20,9 @@ Examples:
   bash build.sh build
   bash build.sh build --build-id local-001
   bash build.sh build --config /path/to/build.json
+  bash build.sh build --profile profiles/debian-server.json
 
-Password: config/local.env or UBUNTU_INITIAL_PASSWORD environment variable.
+Password: config/local.env INITIAL_PASSWORD (legacy UBUNTU_INITIAL_PASSWORD accepted).
 Build proxy: HTTP_PROXY / HTTPS_PROXY / NO_PROXY in config/local.env or environment.
 Default ISO: /srv/ubuntu-customizer/releases/<build-id>/ubuntu-custom-server.iso
 EOF
@@ -31,7 +32,7 @@ as_root() {
         exec "$@"
     fi
     command -v sudo >/dev/null || { echo 'sudo is required, or run this command as root.' >&2; exit 1; }
-    exec sudo --preserve-env=UBUNTU_INITIAL_PASSWORD,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy,NTFY_URL,NTFY_TOPIC,NTFY_TOKEN -- "$@"
+    exec sudo --preserve-env=INITIAL_PASSWORD,UBUNTU_INITIAL_PASSWORD,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy,NTFY_URL,NTFY_TOPIC,NTFY_TOKEN -- "$@"
 }
 command=${1:-build}
 if (($#)); then shift; fi

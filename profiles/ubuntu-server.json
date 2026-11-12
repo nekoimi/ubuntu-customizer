@@ -1,0 +1,8 @@
+{
+  "distro": "ubuntu",
+  "version": "24.04",
+  "architecture": "amd64",
+  "account": {"username": "ubuntu"},
+  "disk": {"template_gib": 24, "root_filesystem": "ext4"},
+  "components": ["docker", "tailscale", "v2raya", "development", "maintenance"]
+}

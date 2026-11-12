@@ -1,0 +1,6 @@
+{
+  "system_mirror": "https://mirrors.aliyun.com/debian/",
+  "security_mirror": "https://mirrors.aliyun.com/debian-security/",
+  "docker_mirror": "https://mirrors.aliyun.com/docker-ce/linux/debian",
+  "python_index": "https://pypi.tuna.tsinghua.edu.cn/simple"
+}

@@ -46,6 +46,14 @@ report_stage
 }
 disk=${1:?target disk}
 build_id=${2:?build id}
+target_user=${3:-ubuntu}
+target_distro=${4:-ubuntu}
+target_version=${5:-24.04}
+[[ $target_user =~ ^[a-z][a-z0-9_-]{0,30}$ && $target_user != root && $target_user != daemon && $target_user != nobody ]]
+case "$target_distro:$target_version" in
+    ubuntu:24.04|debian:13) ;;
+    *) echo 'Unsupported target system' >&2; exit 1 ;;
+esac
 [[ -b $disk && $disk =~ ^/dev/[a-zA-Z0-9/_-]+$ ]]
 [[ $build_id =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]
 target=/mnt/ubuntu-target
@@ -107,6 +115,9 @@ mount "$root" "$target"
 mounted+=("$target")
 mount "$esp" "$target/boot/efi"
 mounted+=("$target/boot/efi")
+# Read data only; never source an os-release file as root in the Live system.
+grep -Fx -e "ID=\"$target_distro\"" -e "ID=$target_distro" "$target/etc/os-release"
+grep -Fx -e "VERSION_ID=\"$target_version\"" -e "VERSION_ID=$target_version" "$target/etc/os-release"
 for path in dev sys; do
     mount --rbind "/$path" "$target/$path"
     mounted+=("$target/$path")
@@ -121,13 +132,13 @@ report_stage
 printf 'UUID=%s / ext4 defaults 0 1\nUUID=%s /boot/efi vfat umask=0077 0 2\n/swapfile none swap sw 0 0\n' "$root_uuid" "$esp_uuid" > "$target/etc/fstab"
 machine_id=$(tr -d '-' < /proc/sys/kernel/random/uuid)
 printf '%s\n' "$machine_id" > "$target/etc/machine-id"
-hostname=ubuntu-${machine_id:0:8}
+hostname=$target_distro-${machine_id:0:8}
 printf '%s\n' "$hostname" > "$target/etc/hostname"
 printf '127.0.0.1 localhost\n127.0.1.1 %s\n::1 localhost ip6-localhost ip6-loopback\n' "$hostname" > "$target/etc/hosts"
 install -d -m 0755 "$target/var/lib/systemd"
 dd if=/dev/urandom of="$target/var/lib/systemd/random-seed" bs=512 count=1 status=none
 chmod 600 "$target/var/lib/systemd/random-seed"
-[[ $(chroot "$target" id -u ubuntu) == 1000 && $(chroot "$target" id -g ubuntu) == 1000 ]]
+[[ $(chroot "$target" id -u "$target_user") == 1000 && $(chroot "$target" id -g "$target_user") == 1000 ]]
 [[ $(chroot "$target" passwd -S root | awk '{print $2}') == L ]]
 chroot "$target" ssh-keygen -A
 chroot "$target" mkswap /swapfile
@@ -135,43 +146,39 @@ mkdir -p "$target/run/sshd"
 chroot "$target" /usr/sbin/sshd -t
 finalize_stage='Generating initramfs and installing BIOS / UEFI bootloaders'
 report_stage
-chroot "$target" update-initramfs -u -k all
-chroot "$target" grub-install --target=i386-pc --recheck "$disk"
-chroot "$target" grub-install --target=x86_64-efi --efi-directory=/boot/efi \
-    --removable --no-nvram --no-uefi-secure-boot --recheck
-chroot "$target" update-grub
-finalize_stage='Checking root and EFI filesystem detection using installed Ubuntu tools'
+chroot "$target" /bin/bash -se -- "$disk" < /usr/local/lib/ubuntu-customizer/bootloader.sh
+finalize_stage='Checking root and EFI filesystem detection using installed system tools'
 report_stage
-# Alpine and the installed Ubuntu can ship different libblkid versions and
-# detect different signatures. Test with Ubuntu's own probe before claiming
+# Alpine and the installed system can ship different libblkid versions and
+# detect different signatures. Test with the target's own probe before claiming
 # success; a successful ext4 mount alone does not prove UUID discovery works.
 chroot "$target" /bin/bash -se -- "$root" "$root_uuid" "$esp" "$esp_uuid" <<'FILESYSTEM_CHECK'
 set -euo pipefail
 root_probe=$(blkid -p -o export "$1") || {
     probe_status=$?
-    printf 'Ubuntu cannot unambiguously identify the root filesystem; possible conflicting signatures. Device=%s; blkid exit=%s. Installation is incomplete.\n' "$1" "$probe_status" >&2
+    printf 'Installed system cannot unambiguously identify the root filesystem; possible conflicting signatures. Device=%s; blkid exit=%s. Installation is incomplete.\n' "$1" "$probe_status" >&2
     printf 'Root probe output: %s\n' "${root_probe:-<empty>}" >&2
     ls -l -- "$1" >&2 || true
-    echo 'Ubuntu read-only root signature inventory:' >&2
+    echo 'Installed system read-only root signature inventory:' >&2
     wipefs --no-act -- "$1" >&2 || true
     exit 1
 }
 if ! grep -qx 'TYPE=ext4' <<< "$root_probe" || ! grep -Fxq "UUID=$2" <<< "$root_probe"; then
-    echo 'Ubuntu root filesystem type or UUID does not match the installed configuration.' >&2
+    echo 'Installed root filesystem type or UUID does not match the installed configuration.' >&2
     printf 'Expected root: device=%s TYPE=ext4 UUID=%s\nActual probe:\n%s\n' "$1" "$2" "$root_probe" >&2
     exit 1
 fi
 esp_probe=$(blkid -p -o export "$3") || {
     probe_status=$?
-    printf 'Ubuntu cannot unambiguously identify the EFI filesystem. Device=%s; blkid exit=%s. Installation is incomplete.\n' "$3" "$probe_status" >&2
+    printf 'Installed system cannot unambiguously identify the EFI filesystem. Device=%s; blkid exit=%s. Installation is incomplete.\n' "$3" "$probe_status" >&2
     printf 'EFI probe output: %s\n' "${esp_probe:-<empty>}" >&2
     ls -l -- "$3" >&2 || true
-    echo 'Ubuntu read-only EFI signature inventory:' >&2
+    echo 'Installed system read-only EFI signature inventory:' >&2
     wipefs --no-act -- "$3" >&2 || true
     exit 1
 }
 if ! grep -qx 'TYPE=vfat' <<< "$esp_probe" || ! grep -Fxq "UUID=$4" <<< "$esp_probe"; then
-    echo 'Ubuntu EFI filesystem type or UUID does not match the installed configuration.' >&2
+    echo 'Installed EFI filesystem type or UUID does not match the installed configuration.' >&2
     printf 'Expected EFI: device=%s TYPE=vfat UUID=%s\nActual probe:\n%s\n' "$3" "$4" "$esp_probe" >&2
     exit 1
 fi

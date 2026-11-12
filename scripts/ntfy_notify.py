@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 
 CONFIG = Path("/etc/ubuntu-customizer/ntfy.json")
+ACCOUNT = Path('/etc/ubuntu-customizer/username')
 STATE = Path("/run/ubuntu-ip-notify/sent.json")
 PRIVATE = tuple(ipaddress.ip_network(net) for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 
@@ -72,8 +73,11 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def publish(settings, snapshot, changed):
     lines = ["主机：" + snapshot["hostname"]]
+    username = ACCOUNT.read_text().strip() if ACCOUNT.exists() else 'ubuntu'
+    if not re.fullmatch(r'[a-z][a-z0-9_-]{0,30}', username):
+        raise ValueError('Invalid notification SSH username')
     for name, address in snapshot["addresses"]:
-        lines.extend((f"{name}：{address}", f"SSH：ssh ubuntu@{address}"))
+        lines.extend((f"{name}：{address}", f"SSH：ssh {username}@{address}"))
     payload = {"topic": settings["topic"], "title": ("服务器 IP 变化：" if changed else "服务器上线：") + snapshot["hostname"],
                "message": "\n".join(lines), "tags": ["computer"]}
     request = urllib.request.Request(settings["url"] + "/", data=json.dumps(payload).encode(),

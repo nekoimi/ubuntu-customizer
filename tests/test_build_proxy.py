@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("proxy_builder", ROOT / "scripts/build.py")
+spec = importlib.util.spec_from_file_location("proxy_builder", ROOT / "image_builder/pipeline.py")
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 import build_env  # noqa: E402; build.py makes its sibling importable.

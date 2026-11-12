@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("alpine_builder", ROOT / "scripts/build.py")
+spec = importlib.util.spec_from_file_location("alpine_builder", ROOT / "image_builder/pipeline.py")
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 

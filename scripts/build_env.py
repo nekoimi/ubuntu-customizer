@@ -14,7 +14,7 @@ else:
 LOCAL_ENV = Path(__file__).resolve().parents[1] / "config/local.env"
 PROXY_KEYS = ("http_proxy", "https_proxy", "no_proxy")
 NTFY_KEYS = ("NTFY_URL", "NTFY_TOPIC", "NTFY_TOKEN")
-ALLOWED_KEYS = {"UBUNTU_INITIAL_PASSWORD", *PROXY_KEYS, *(key.upper() for key in PROXY_KEYS), *NTFY_KEYS}
+ALLOWED_KEYS = {"INITIAL_PASSWORD", "UBUNTU_INITIAL_PASSWORD", *PROXY_KEYS, *(key.upper() for key in PROXY_KEYS), *NTFY_KEYS}
 
 
 def read_local_env(path):
@@ -35,7 +35,8 @@ def read_local_env(path):
 
 
 def password_input(env, path):
-    value = env.get("UBUNTU_INITIAL_PASSWORD") or read_local_env(path).get("UBUNTU_INITIAL_PASSWORD", "")
+    local = read_local_env(path)
+    value = env.get("INITIAL_PASSWORD") or env.get("UBUNTU_INITIAL_PASSWORD") or local.get("INITIAL_PASSWORD") or local.get("UBUNTU_INITIAL_PASSWORD", "")
     if not value or any(char in value for char in "\r\n\x00"):
         raise ValueError("Provide a nonempty single-line initial password via Secret or local.env")
     return value
@@ -99,6 +100,7 @@ def main():
         raise ValueError("Usage: python3 scripts/build_env.py --exec COMMAND [ARG ...]")
     configure_proxy()
     os.environ.pop("UBUNTU_INITIAL_PASSWORD", None)
+    os.environ.pop("INITIAL_PASSWORD", None)
     for key in NTFY_KEYS:
         os.environ.pop(key, None)
     os.execvp(sys.argv[2], sys.argv[2:])

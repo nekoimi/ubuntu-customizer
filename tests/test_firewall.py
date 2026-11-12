@@ -7,7 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 BASH = shutil.which("bash") if os.name != "nt" else shutil.which("bash", path=r"C:\Program Files\Git\bin")
-CUSTOMIZE = (ROOT / "scripts/customize.sh").read_text()
+CUSTOMIZE = (ROOT / "components/server/customize.sh").read_text()
 SETUP = CUSTOMIZE.split("<<'FIREWALL_CONFIG'\n", 1)[1].split("\nFIREWALL_CONFIG", 1)[0]
 
 

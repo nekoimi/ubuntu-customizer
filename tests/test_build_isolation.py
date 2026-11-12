@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("isolation_builder", ROOT / "scripts/build.py")
+spec = importlib.util.spec_from_file_location("isolation_builder", ROOT / "image_builder/pipeline.py")
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 BASH = shutil.which("bash") if os.name != "nt" else shutil.which("bash", path=r"C:\Program Files\Git\bin")

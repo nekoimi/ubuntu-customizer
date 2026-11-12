@@ -1,3 +1,5 @@
+# Legacy Ubuntu list, used only with config/build.json (including the old default command).
+# Profile builds use components/server/packages.txt plus distros/<distro>/<version>/packages.txt.
 # Ubuntu Server base, portable kernel and boot tools
 ubuntu-minimal
 ubuntu-standard

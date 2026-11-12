@@ -1,0 +1,5 @@
+ubuntu-minimal
+ubuntu-standard
+linux-generic
+linux-firmware
+dnsutils

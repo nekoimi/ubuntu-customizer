@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("partition_devices", ROOT / "installer/partition_devices.py")
 devices = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(devices)
-build_spec = importlib.util.spec_from_file_location("partition_builder", ROOT / "scripts/build.py")
+build_spec = importlib.util.spec_from_file_location("partition_builder", ROOT / "image_builder/pipeline.py")
 builder = importlib.util.module_from_spec(build_spec)
 build_spec.loader.exec_module(builder)
 

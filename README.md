@@ -1,10 +1,20 @@
-# Ubuntu Customizer
+# Linux Image Builder
 
-通过 Alpine Live 安装环境部署预先初始化完成的 Ubuntu Server 磁盘镜像，制作可离线安装的启动 ISO。
+通过 Alpine Live 安装环境部署预先初始化完成的 Ubuntu / Debian 磁盘镜像，制作可离线安装的启动 ISO。
+
+首版目标为 Ubuntu 24.04 和 Debian 13，入口与目录划分见 [多发行版构建](docs/多发行版构建.md)。本次改造尚需分别执行 Linux 构建和安装验收。
+
+```bash
+bash build.sh setup
+bash build.sh build --profile profiles/ubuntu-server.json
+bash build.sh build --profile profiles/debian-server.json
+```
+
+显式 Profile 使用 `config/host.json` 和各发行版默认配置；不带 `--profile` 的原命令继续读取 `config/build.json`、`config/packages.txt` 构建 Ubuntu。以下原有说明主要对应 Ubuntu 默认方案。
 
 已实现 Ubuntu 母镜像构建、Alpine Live ISO 打包和整盘安装器，当前以 **Ubuntu 构建机器直接执行命令行** 为主要方式。GitHub workflow 暂缓接入，保留代码且仍只允许手动触发。
 
-不需要 GitHub Runner、Actions Secret 或 Docker。详细步骤见 [构建与运行](docs/构建与运行.md)。用户已在 Linux 构建机生成 ISO，并在虚拟机中完成 Live 启动、镜像写入及回读；安装收尾修复仍需用新 ISO 验证，完整安装验收尚未完成。
+不需要 GitHub Runner、Actions Secret 或 Docker。详细步骤见 [构建与运行](docs/构建与运行.md)。此前 Ubuntu ISO 已由用户完成实机安装；重构后的 Profile 构建仍需重新验收，Debian 尚无安装成功记录。
 
 ```bash
 # Ubuntu 22.04 / 24.04 x86_64 构建服务器
@@ -18,7 +28,7 @@ bash build.sh build
 
 GitHub 下载失败时，可先运行 `bash build.sh check-downloads`，使用相同的 `.env` / 环境代理实际下载并核验 uv、v2rayA；不构建磁盘镜像，也不发送通知。日志会显示代理配置是否启用、GitHub 的配置路由及失败 HTTP 状态码，不显示代理凭据。
 
-重复构建会复用 `/srv/ubuntu-customizer/cache/apt/archives` 中的 Ubuntu / Docker / Tailscale `.deb` 软件包，减少下载量；仓库索引仍刷新并验证签名。缓存目录由 `config/build.json` 的 `cache_dir` 配置，设为 `null` 可禁用。首次下载速度仍取决于镜像站和构建代理。
+重复构建会复用 `<cache_dir>/<发行版>/<suite>/amd64/<仓库配置摘要>/apt/archives` 中的系统 / Docker / Tailscale `.deb` 软件包，减少下载量；仓库索引仍刷新并验证签名。新 Profile 构建在 `config/host.json` 设置 `cache_dir`，旧命令仍在 `config/build.json` 设置；设为 `null` 可禁用。原缓存不自动迁移，首次下载速度仍取决于镜像站和构建代理。
 
 可在 Linux 服务器执行 `bash build.sh vm-test --iso <ISO路径>`，使用 KVM、独立虚拟 NVMe 和本机 VNC 测试安装；安装后用 `--boot installed` 启动同一测试盘。依赖安装、Windows SSH 隧道和完整日志导出见 [Linux 虚拟机安装测试](docs/Linux虚拟机安装测试.md)。
 

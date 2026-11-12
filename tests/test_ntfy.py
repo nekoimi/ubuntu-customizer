@@ -15,7 +15,7 @@ from unittest.mock import patch
 import urllib.error
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("ntfy_builder", ROOT / "scripts/build.py")
+spec = importlib.util.spec_from_file_location("ntfy_builder", ROOT / "image_builder/pipeline.py")
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 import build_env  # noqa: E402
@@ -158,13 +158,19 @@ class LocalPublish(unittest.TestCase):
                 ntfy.publish(settings, snapshot, changed=False)
                 self.assertEqual(requests[0][1], "Bearer " + SETTINGS["token"])
                 self.assertIn("ssh ubuntu@10.1.1.5", requests[0][2]["message"])
+                with tempfile.TemporaryDirectory() as folder:
+                    account = Path(folder) / 'username'
+                    account.write_text('debian\n')
+                    with patch.object(ntfy, 'ACCOUNT', account):
+                        ntfy.publish(settings, snapshot, changed=False)
+                    self.assertIn('ssh debian@10.1.1.5', requests[1][2]['message'])
                 mode[0] = "bad-ack"
                 with self.assertRaises(ValueError):
                     ntfy.publish(settings, snapshot, changed=False)
                 mode[0] = "redirect"
                 with self.assertRaises(urllib.error.HTTPError):
                     ntfy.publish(settings, snapshot, changed=True)
-            self.assertEqual([item[0] for item in requests], ["/", "/", "/"])
+            self.assertEqual([item[0] for item in requests], ["/", "/", "/", "/"])
         finally:
             server.shutdown()
             server.server_close()

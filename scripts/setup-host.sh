@@ -9,7 +9,7 @@ if [[ ${1:-} != --with-build-env ]]; then
 fi
 apt-get update
 apt-get install -y --no-install-recommends \
-  debootstrap ubuntu-keyring ca-certificates curl python3 python3-yaml \
+  debootstrap ubuntu-keyring debian-archive-keyring ca-certificates curl python3 python3-yaml \
   util-linux parted gdisk e2fsprogs zerofree dosfstools zstd squashfs-tools \
   grub-common grub-pc-bin grub-efi-amd64-bin mtools xorriso \
   cpio gzip xz-utils kmod openssl git shellcheck

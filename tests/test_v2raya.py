@@ -21,7 +21,7 @@ def module(name, path):
     return result
 
 
-builder = module("v2raya_builder", "scripts/build.py")
+builder = module("v2raya_builder", "image_builder/pipeline.py")
 guest = module("v2raya_guest", "scripts/check-v2raya.py")
 
 

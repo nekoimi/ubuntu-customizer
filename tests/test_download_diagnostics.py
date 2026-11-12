@@ -2,19 +2,49 @@
 from contextlib import redirect_stderr, redirect_stdout
 import importlib.util
 import io
+import hashlib
 from pathlib import Path
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
 import urllib.error
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("download_builder", ROOT / "scripts/build.py")
+spec = importlib.util.spec_from_file_location("download_builder", ROOT / "image_builder/pipeline.py")
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 
 
 class DownloadDiagnostics(unittest.TestCase):
+    def test_uv_download_verifies_and_extracts_both_binaries(self):
+        with tempfile.TemporaryDirectory() as folder:
+            build = builder.Build.__new__(builder.Build)
+            build.work = Path(folder)
+            build.config = {'uv_version': '0.13.7'}
+            build.details = {}
+            build.note = Mock()
+            destination = build.work / 'tools'
+            destination.mkdir()
+            archive_data = io.BytesIO()
+            with tarfile.open(fileobj=archive_data, mode='w:gz') as archive:
+                for name in ('uv', 'uvx'):
+                    content = (name + '-binary').encode()
+                    member = tarfile.TarInfo('uv-x86_64-unknown-linux-gnu/' + name)
+                    member.size = len(content)
+                    archive.addfile(member, io.BytesIO(content))
+            archive_bytes = archive_data.getvalue()
+            expected = hashlib.sha256(archive_bytes).hexdigest()
+            def response(request, **kwargs):
+                if request.full_url.endswith('.sha256'):
+                    return io.BytesIO(expected.encode())
+                return io.BytesIO(archive_bytes)
+            with patch.object(builder.urllib.request, 'urlopen', side_effect=response):
+                build.uv(destination)
+            self.assertEqual((destination / 'uv').read_bytes(), b'uv-binary')
+            self.assertEqual((destination / 'uvx').read_bytes(), b'uvx-binary')
+            self.assertEqual(build.details['uv']['archive_sha256'], expected)
+
     def test_http_details_omit_credentials_queries_reasons_and_headers(self):
         for code in (403, 404, 407, 429, 502, 503, 504):
             with self.subTest(code=code):
@@ -52,7 +82,7 @@ class DownloadDiagnostics(unittest.TestCase):
                 patch.object(builder.Build, "uv", autospec=True, side_effect=fake_uv) as uv, \
                 patch.object(builder.Build, "v2raya", autospec=True) as v2raya, \
                 patch.object(builder.Build, "preflight") as preflight, \
-                patch.object(builder.Build, "ubuntu") as ubuntu, redirect_stdout(io.StringIO()):
+                patch.object(builder.Build, "system_image") as ubuntu, redirect_stdout(io.StringIO()):
             self.assertEqual(builder.check_downloads({"uv_version": "latest"}), 0)
         uv.assert_called_once()
         v2raya.assert_called_once()
@@ -78,7 +108,7 @@ class DownloadDiagnostics(unittest.TestCase):
     def test_build_failure_shows_http_details_in_console_and_log_without_secrets(self):
         with tempfile.TemporaryDirectory() as folder:
             build = Mock(work=Path(folder), loop=None)
-            build.ubuntu.side_effect = urllib.error.HTTPError("https://github.com/file?private=query", 404, "private", {}, None)
+            build.system_image.side_effect = urllib.error.HTTPError("https://github.com/file?private=query", 404, "private", {}, None)
             with patch.object(builder.sys, "argv", ["build.py"]), \
                     patch.object(builder, "Build", return_value=build), \
                     patch.object(builder.signal, "signal"), patch.object(builder.os, "umask"), \

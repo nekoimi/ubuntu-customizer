@@ -7,7 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 BASH = shutil.which("bash") if os.name != "nt" else shutil.which("bash", path=r"C:\Program Files\Git\bin")
-SCRIPT = (ROOT / "scripts/check-guest.sh").read_text()
+SCRIPT = (ROOT / "components/server/check.sh").read_text()
 CHECKS = SCRIPT[SCRIPT.index("sshd -t\n"):SCRIPT.index("\ngrep -q '^Signed-By:")]
 TRAP = next(line for line in SCRIPT.splitlines() if line.startswith("trap "))
 TMUX_CHECK = SCRIPT.split("<<'TMUX_CHECK'\n", 1)[1].split("\nTMUX_CHECK", 1)[0]
@@ -32,7 +32,7 @@ command() {
                 self.assertEqual(result.returncode, 0 if missing == "none" else 1, result.stderr)
                 self.assertEqual("CHECK_PASSED" in result.stdout, missing == "none")
 
-    def run_checks(self, *, permit_root="no", ssh_status=0, apt_status=0):
+    def run_checks(self, *, permit_root="no", ssh_status=0, apt_status=0, lastlog=True):
         # Everything is a shell stub; no guest or host services/files are modified.
         stub = r'''
 set -euo pipefail
@@ -44,7 +44,8 @@ emit_padding() {
 sshd() {
     if [[ $1 == -t ]]; then return 0; fi
     printf 'permitrootlogin %s\n' "$TEST_PERMIT_ROOT"
-    printf '%s\n' 'passwordauthentication yes' 'printmotd no' 'printlastlog no' 'banner none' 'clientaliveinterval 60' 'clientalivecountmax 3'
+    printf '%s\n' 'passwordauthentication yes' 'printmotd no' 'banner none' 'clientaliveinterval 60' 'clientalivecountmax 3'
+    if [[ $TEST_LASTLOG == yes ]]; then echo 'printlastlog no'; fi
     emit_padding
     return "$TEST_SSH_STATUS"
 }
@@ -55,12 +56,16 @@ apt-config() {
 }
 '''
         env = {**os.environ, "TEST_PERMIT_ROOT": permit_root, "TEST_SSH_STATUS": str(ssh_status),
-               "TEST_APT_STATUS": str(apt_status)}
+               "TEST_APT_STATUS": str(apt_status), "TEST_LASTLOG": 'yes' if lastlog else 'no'}
         return subprocess.run([BASH, "-s"], input=stub + "\n" + TRAP + "\n" + CHECKS,
                               text=True, capture_output=True, env=env)
 
     def test_large_valid_configuration_passes_without_broken_pipe(self):
         result = self.run_checks()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_openssh_without_lastlog_support_passes(self):
+        result = self.run_checks(lastlog=False)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_wrong_ssh_policy_still_fails_with_diagnostic(self):

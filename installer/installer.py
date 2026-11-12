@@ -169,6 +169,8 @@ def check_live_tools():
         raise Refusal("Missing Alpine Live tools: " + ", ".join(missing) + "; rebuild the installer ISO. No target disk has been written.")
     if not Path(__file__).with_name("partition_devices.py").is_file():
         raise Refusal("Missing partition discovery helper; rebuild the installer ISO. No target disk has been written.")
+    if not Path(__file__).with_name('bootloader.sh').is_file():
+        raise Refusal('Missing target boot adapter; rebuild the installer ISO. No target disk has been written.')
 
 
 def output(*args):
@@ -189,8 +191,16 @@ def sha256_file(path):
 
 
 def validate_manifest(manifest):
-    if manifest.get("format") != 1 or manifest.get("architecture") != "amd64":
+    if type(manifest.get("format")) is not int or manifest["format"] not in (1, 2) or manifest.get("architecture") != "amd64":
         raise Refusal("Unsupported payload format or architecture")
+    if manifest['format'] == 2:
+        if (manifest.get('distro'), manifest.get('version')) not in (('ubuntu', '24.04'), ('debian', '13')):
+            raise Refusal('Unsupported target system')
+        if manifest.get('payload') != 'system.img.zst' or manifest.get('root_filesystem') != 'ext4' or manifest.get('finalizer') != 'debian-family-v1':
+            raise Refusal('Unsupported payload or finalizer')
+        user = manifest.get('username')
+        if not isinstance(user, str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,30}', user) or user in ('root', 'daemon', 'nobody'):
+            raise Refusal('Invalid target username')
     if manifest.get("sector_size") != 512 or manifest.get("root_partition") != 3 or manifest.get("esp_partition") != 2:
         raise Refusal("Unsupported disk layout")
     size = manifest.get("raw_bytes")
@@ -310,14 +320,10 @@ def interaction_panel(title, lines, *, color="33"):
 
 
 def welcome(prompt=None):
-    interaction_panel("UBUNTU CUSTOMIZER", [
-        "       _   _ ____  _   _ _   _ _____ _   _",
-        "      | | | | __ )| | | | \\ | |_   _| | | |",
-        "      | | | |  _ \\| | | |  \\| | | | | | | |",
-        "      | |_| | |_) | |_| | |\\  | | | | |_| |",
-        "       \\___/|____/ \\___/|_| \\_| |_|  \\___/",
+    interaction_panel("LINUX IMAGE BUILDER", [
+        "       L I N U X   I M A G E   B U I L D E R",
         "",
-        "  Customized Ubuntu Server 24.04 LTS | x86_64",
+        "  Customized Ubuntu / Debian Server | x86_64",
         "  Alpine Live Installer | Offline whole-disk installation",
         "",
         "[ACTION REQUIRED 1/3] START INSTALLER",
@@ -554,7 +560,7 @@ def main(*, check_tools_only=False):
     if (MEDIA / "UBUNTU_CUSTOMIZER_MEDIA").read_text().strip() != manifest["build_id"]:
         raise Refusal("Media and payload build IDs differ")
     print("Verifying compressed payload; no target writes yet...")
-    image = PAYLOAD / "ubuntu.img.zst"
+    image = PAYLOAD / ('system.img.zst' if manifest['format'] == 2 else 'ubuntu.img.zst')
     if sha256_file(image) != manifest["compressed_sha256"]:
         raise Refusal("Compressed payload SHA256 mismatch")
     sp.run(["zstd", "--test", "--", str(image)], check=True)
@@ -586,7 +592,11 @@ def main(*, check_tools_only=False):
     if SESSION is not None:
         finalize_env.update(UBUNTU_CUSTOMIZER_STAGE_FILE=str(SESSION.stage_path),
                             UBUNTU_CUSTOMIZER_ERROR_FILE=str(SESSION.command_path))
-    sp.run(["bash", "/usr/local/lib/ubuntu-customizer/finalize.sh", selected["path"], manifest["build_id"]],
+    target_user = manifest['username'] if manifest['format'] == 2 else 'ubuntu'
+    target_distro = manifest['distro'] if manifest['format'] == 2 else 'ubuntu'
+    target_version = manifest['version'] if manifest['format'] == 2 else '24.04'
+    sp.run(["bash", "/usr/local/lib/ubuntu-customizer/finalize.sh", selected["path"], manifest["build_id"],
+            target_user, target_distro, target_version],
            env=finalize_env, check=True)
     interaction_panel("[SUCCESS] INSTALLATION COMPLETE", [
         f"  Installed disk : {selected['path']}",
@@ -596,8 +606,8 @@ def main(*, check_tools_only=False):
         "  1. Remove the installation USB (or disconnect the ISO in your VM).",
         "  2. Reboot manually from the Live shell below:",
         "       reboot",
-        "  3. Log in to the installed Ubuntu system:",
-        "       Username: ubuntu | Password: your preset image password",
+        f"  3. Log in to the installed {target_distro} system:",
+        f"       Username: {target_user} | Password: your preset image password",
         "  4. Change your login password:",
         "       passwd",
         "  5. If needed, authenticate Tailscale and follow its login link:",
@@ -606,7 +616,7 @@ def main(*, check_tools_only=False):
         "       Create a v2rayA account, import a node and connect/start it.",
         "       Docker is already configured to use the local proxy.",
         "",
-        "Run passwd and tailscale up AFTER booting into installed Ubuntu.",
+        "Run passwd and tailscale up AFTER booting into the installed system.",
         "The machine will NOT reboot automatically.",
     ], color="32")
 

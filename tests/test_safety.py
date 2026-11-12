@@ -20,7 +20,7 @@ def module(name, path):
 
 
 installer = module("installer", "installer/installer.py")
-builder = module("builder", "scripts/build.py")
+builder = module("builder", "image_builder/pipeline.py")
 
 
 def disk(path, size=64 * 1024 ** 3, **extra):
@@ -88,7 +88,7 @@ class WelcomeSafety(unittest.TestCase):
                     with self.assertRaisesRegex(installer.Refusal, "start not confirmed"):
                         installer.welcome(prompt)
                 prompt.assert_called_once()
-                self.assertIn("UBUNTU CUSTOMIZER", display.getvalue())
+                self.assertIn("LINUX IMAGE BUILDER", display.getvalue())
                 self.assertIn("No timeout", display.getvalue())
                 self.assertIn("timer has NOT started", display.getvalue())
 
@@ -225,12 +225,13 @@ class ConfigurationSafety(unittest.TestCase):
     def test_check_cli_does_not_read_password_or_start_build(self):
         with tempfile.TemporaryDirectory() as folder:
             config = Path(folder) / "build.json"
-            config.write_text("{}")
+            config.write_text((ROOT / 'config/host.json').read_text())
             with patch.object(builder.sys, "argv", ["build.py", "--check", "--config", str(config)]), \
                     patch.object(builder, "check_host", return_value={}) as check, \
                     patch.object(builder, "Build") as build:
                 self.assertEqual(builder.main(), 0)
-            check.assert_called_once_with({})
+            check.assert_called_once()
+            self.assertEqual(check.call_args.args[0]['distro'], 'ubuntu')
             build.assert_not_called()
 
     def test_secret_parser_does_not_execute_shell_or_expand_values(self):
@@ -323,6 +324,7 @@ class WriteGateSafety(unittest.TestCase):
     def test_build_time_tool_check_does_not_inspect_media_or_disks(self):
         with patch.object(installer.os, "geteuid", return_value=0, create=True), \
                 patch.object(installer.shutil, "which", return_value="/usr/bin/tool"), \
+                patch.object(installer.Path, "is_file", return_value=True), \
                 patch.object(installer.Path, "read_text") as read_media, \
                 patch.object(installer, "discover") as discover, \
                 patch.object(installer.os, "open") as open_target:

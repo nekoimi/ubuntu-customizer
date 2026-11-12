@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("progress_builder", ROOT / "scripts/build.py")
+spec = importlib.util.spec_from_file_location("progress_builder", ROOT / "image_builder/pipeline.py")
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 
@@ -49,7 +49,7 @@ class BuildProgress(unittest.TestCase):
 
     def test_build_failure_shows_tool_exit_code_and_exact_log_path_without_arguments(self):
         build = Mock(work=self.build.work, loop=None)
-        build.ubuntu.side_effect = subprocess.CalledProcessError(100, ["debootstrap", "private-argument"])
+        build.system_image.side_effect = subprocess.CalledProcessError(100, ["debootstrap", "private-argument"])
         console = io.StringIO()
         with patch.object(builder.sys, "argv", ["build.py"]), \
                 patch.object(builder, "Build", return_value=build), \
@@ -59,7 +59,7 @@ class BuildProgress(unittest.TestCase):
         self.assertIn("debootstrap; exit code 100", console.getvalue())
         self.assertIn(str(build.work / "tools.log"), console.getvalue())
         self.assertNotIn("private-argument", console.getvalue())
-        build.report.assert_called_once_with("failed", build.ubuntu.side_effect)
+        build.report.assert_called_once_with("failed", build.system_image.side_effect)
         build.unmount_to.assert_called_once_with(0)
 
     def test_heartbeat_stops_on_success_and_interruption(self):

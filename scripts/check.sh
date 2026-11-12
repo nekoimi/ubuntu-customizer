@@ -7,4 +7,4 @@ shellcheck build.sh
 while IFS= read -r -d '' script; do
     bash -n "$script"
     shellcheck "$script"
-done < <(find scripts installer \( -name '*.sh' -o -name '*.bash' \) -print0)
+done < <(find scripts installer distros components \( -name '*.sh' -o -name '*.bash' \) -print0)
