@@ -6,3 +6,4 @@ firmware-misc-nonfree
 firmware-iwlwifi
 firmware-realtek
 bind9-dnsutils
+qemu-user

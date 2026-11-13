@@ -41,6 +41,13 @@ fi
 section 'Docker'
 inspect docker --version
 inspect docker info --format 'Server={{.ServerVersion}} Containers={{.Containers}} Running={{.ContainersRunning}} Images={{.Images}}'
+echo 'Multi-platform setup: sudo docker-multiarch-setup (connect a v2rayA node first).'
+echo 'Build with proxy for FROM and RUN: sudo docker-multiarch-build [buildx build options] .'
+if [[ -r /proc/sys/fs/binfmt_misc/customizer-aarch64 ]]; then
+    cat /proc/sys/fs/binfmt_misc/customizer-aarch64
+else
+    echo 'ARM64 binfmt registration unavailable; check systemd-binfmt.service.'
+fi
 section 'Tailscale'
 inspect tailscale status
 section 'v2rayA'

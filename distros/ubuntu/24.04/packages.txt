@@ -2,4 +2,5 @@ ubuntu-minimal
 ubuntu-standard
 linux-generic
 linux-firmware
+qemu-user-static
 dnsutils

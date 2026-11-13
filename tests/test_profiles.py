@@ -198,8 +198,10 @@ class Profiles(unittest.TestCase):
                     raw = build.system_image()
                 self.assertTrue(raw.is_file())
                 staged = build.work / 'target/tmp/customizer'
+                self.assertTrue((staged / 'docker_multiarch.py').is_file())
                 packages = (staged / 'packages.txt').read_text()
                 self.assertIn('linux-generic' if distro == 'ubuntu' else 'linux-image-amd64', packages)
+                self.assertIn('qemu-user-static\n' if distro == 'ubuntu' else 'qemu-user\n', packages)
                 self.assertIn('fdisk\n', packages)
                 customize = build.guest.call_args_list[0]
                 self.assertEqual(customize.args[2]['TARGET_USER'], distro)

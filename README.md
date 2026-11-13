@@ -32,6 +32,8 @@ GitHub 下载失败时，可先运行 `bash build.sh check-downloads`，使用�
 
 可在 Linux 服务器执行 `bash build.sh vm-test --iso <ISO路径>`，使用 KVM、独立虚拟 NVMe 和本机 VNC 测试安装；安装后用 `--boot installed` 启动同一测试盘。依赖安装、Windows SSH 隧道和完整日志导出见 [Linux 虚拟机安装测试](docs/Linux虚拟机安装测试.md)。
 
+预置 Docker Buildx、ARM64 静态 QEMU 与重启后自动 binfmt 注册。安装后连接 v2rayA 节点，执行 `sudo docker-multiarch-setup`，再用 `sudo docker-multiarch-build --platform linux/amd64,linux/arm64 -t <镜像> --push .` 构建。BuildKit 访问仓库和 Dockerfile 的 `RUN` 下载均有代理；该构建命令使用宿主网络，详见 [Docker 多平台构建与代理](docs/Docker多平台构建.md)。
+
 入口在需要时自动调用 sudo。构建编号默认自动生成，ISO 保存到 `/srv/ubuntu-customizer/releases/<build-id>/ubuntu-custom-server.iso`，终端会显示实际路径。`bash build.sh test` 可运行安全测试和静态检查，`bash build.sh --help` 查看用法。
 
 终端显示主要步骤的开始、完成和耗时；长时间运行时每 30 秒提示当前步骤仍在执行。详细下载、安装输出保存在终端提示的 `tools.log`，可在另一个终端用 `sudo tail -f <日志路径>` 查看。

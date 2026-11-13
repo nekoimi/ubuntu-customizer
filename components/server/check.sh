@@ -94,6 +94,24 @@ grep -qx '\* hard core 0' /etc/security/limits.d/99-customizer-core.conf
 server-info --help
 server-update --help
 proxy-check --help
+docker-multiarch --help
+docker-multiarch-setup --help
+docker-multiarch-build --help
+echo 'Checking persistent ARM64 emulation without accessing the live binfmt registry'
+[[ -L /etc/systemd/system/sysinit.target.wants/systemd-binfmt.service ]]
+python3 - <<'BINFMT_CHECK'
+from pathlib import Path
+fields = Path('/etc/binfmt.d/customizer-aarch64.conf').read_text().strip().split(':')
+assert len(fields) == 8 and fields[1:4] == ['customizer-aarch64', 'M', ''] and fields[7] == 'F'
+assert fields[4] == r'\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xb7\x00'
+assert fields[5] == r'\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff'
+assert fields[6] in ('/usr/bin/qemu-aarch64-static', '/usr/bin/qemu-aarch64')
+assert Path(fields[6]).is_file()
+BINFMT_CHECK
+qemu=$(cut -d: -f7 /etc/binfmt.d/customizer-aarch64.conf)
+qemu_headers=$(LC_ALL=C readelf -l "$qemu")
+if grep -qw INTERP <<< "$qemu_headers"; then exit 1; fi
+if dpkg-divert --list | grep -F update-binfmts.customizer-disabled; then exit 1; fi
 ntfy-ip-notify --check-config
 if [[ -f /etc/ubuntu-customizer/ntfy.json ]]; then
     [[ $(stat -c '%u:%a' /etc/ubuntu-customizer) == 0:700 ]]

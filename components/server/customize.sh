@@ -23,6 +23,11 @@ EOF
 # policy-rc.d prevents package postinst scripts starting services during image build.
 printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
 chmod 755 /usr/sbin/policy-rc.d
+# QEMU postinst can call update-binfmts directly, bypassing policy-rc.d.
+# Defer kernel registration to the installed system; the build shares the host kernel.
+dpkg-divert --local --add --rename --divert /usr/sbin/update-binfmts.customizer-disabled /usr/sbin/update-binfmts
+printf '#!/bin/sh\nexit 0\n' > /usr/sbin/update-binfmts
+chmod 755 /usr/sbin/update-binfmts
 echo 'iperf3 iperf3/start_daemon boolean false' | debconf-set-selections
 echo 'ufw ufw/enable boolean false' | debconf-set-selections
 echo 'Installing target base tools and development packages'
@@ -102,6 +107,22 @@ url = "$PYTHON_INDEX"
 default = true
 EOF
 install -m 0755 /tmp/customizer/uv /tmp/customizer/uvx /usr/local/bin/
+
+echo 'Preparing persistent ARM64 emulation and multi-platform build helpers (no live registration)'
+qemu=/usr/bin/qemu-aarch64-static
+[[ -x $qemu ]] || qemu=/usr/bin/qemu-aarch64
+[[ -x $qemu ]]
+qemu_headers=$(LC_ALL=C readelf -l "$qemu")
+if grep -qw INTERP <<< "$qemu_headers"; then
+    echo 'ARM64 QEMU must be statically linked for container execution.' >&2
+    exit 1
+fi
+install -d /etc/binfmt.d
+printf ':customizer-aarch64:M::\\x7fELF\\x02\\x01\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x02\\x00\\xb7\\x00:\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\x00\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xfe\\xff\\xff\\xff:%s:F\n' "$qemu" > /etc/binfmt.d/customizer-aarch64.conf
+install -m 0755 /tmp/customizer/docker_multiarch.py /usr/local/bin/docker-multiarch
+ln -s docker-multiarch /usr/local/bin/docker-multiarch-setup
+ln -s docker-multiarch /usr/local/bin/docker-multiarch-build
+systemctl add-wants sysinit.target systemd-binfmt.service
 
 echo 'Configuring accounts, hostname, locale and networking'
 getent passwd "${TARGET_USER}" >/dev/null || useradd --uid 1000 --user-group --create-home --shell /bin/bash "${TARGET_USER}"
@@ -297,4 +318,6 @@ dpkg-query -W -f='${Package}\t${Version}\n' | sort > /var/lib/ubuntu-customizer/
 apt-cache policy docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin tailscale \
   > /var/lib/ubuntu-customizer/package-origins.txt
 rm -f /usr/sbin/policy-rc.d
+rm -f /usr/sbin/update-binfmts
+dpkg-divert --local --remove --rename --divert /usr/sbin/update-binfmts.customizer-disabled /usr/sbin/update-binfmts
 echo 'Target guest customization completed'

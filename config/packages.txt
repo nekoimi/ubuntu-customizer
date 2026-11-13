@@ -7,6 +7,7 @@ apparmor
 rsyslog
 linux-generic
 linux-firmware
+qemu-user-static
 systemd-sysv
 initramfs-tools
 grub-pc-bin

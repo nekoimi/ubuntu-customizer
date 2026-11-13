@@ -251,7 +251,7 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
         (tools / 'packages.txt').write_text(packages)
         for stage in ('customize', 'check'):
             (tools / (stage + '.sh')).write_text(self.target.guest_script(stage))
-        for name in ("server-info.sh", "server-update.sh", "check-v2raya.py", "proxy-shell.bash", "proxy-check.py", "ntfy_notify.py"):
+        for name in ("server-info.sh", "server-update.sh", "check-v2raya.py", "proxy-shell.bash", "proxy-check.py", "ntfy_notify.py", "docker_multiarch.py"):
             shutil.copyfile(REPO / "scripts" / name, tools / name)
         self.install_ntfy_config(root)
         with self.progress("Downloading and verifying uv from GitHub"):
