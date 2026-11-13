@@ -18,6 +18,8 @@ sudo docker-multiarch-setup
 
 命令可以重复执行：已有配置匹配时复用构建器与缓存；同名构建器的驱动、端点、代理等不匹配时拒绝继续，不自动删除、替换或清理缓存。不会修改其他构建器、Docker daemon 配置、普通容器的环境变量或用户的 Docker 客户端代理配置。初始化会将该构建器选为 root 用户在本地上下文的当前构建器。
 
+Buildx 可能将 `default` 上下文保存为 `unix:///var/run/docker.sock`，也可能显示其 `/run/docker.sock` 等价路径；脚本接受这两种本地 rootful socket 和 `default`。旧脚本只接受字面量 `default`，因此首次创建后也可能误报 `incompatible builder`。遇到此情况只需更新 `/usr/local/bin/docker-multiarch` 为新版脚本，再执行初始化，已有构建器和缓存可复用。不兼容提示现在会列出不匹配的字段名，不显示自定义代理值。
+
 构建器状态与缓存保存在本机 Docker 数据中，容器重启策略为 `unless-stopped`。重启系统后 binfmt 由 systemd 恢复；若手动停止过 BuildKit，可再次执行初始化或由下一次构建启动。每次重启仍需 v2rayA 节点可用，命令不会自动添加或连接节点。
 
 ## 构建并推送
@@ -39,12 +41,15 @@ sudo docker-multiarch-build \
 | 下载位置 | 预置方式 |
 | --- | --- |
 | Docker 下载 BuildKit 镜像 | 已有 daemon 代理 |
+| Buildx 客户端获取 Docker Hub / 仓库认证 token | 辅助命令为本机 Docker/Buildx 子进程配置 HTTP_PROXY / HTTPS_PROXY / NO_PROXY，覆盖继承的终端代理与绕过列表 |
 | BuildKit 解析、拉取基础镜像，以及推送/导入导出远端缓存 | 构建器容器的 HTTP_PROXY / HTTPS_PROXY / NO_PROXY 环境变量 |
 | Dockerfile `RUN` 中的 curl、APT 等下载 | 构建命令注入标准代理 build args，配合宿主网络访问本机代理 |
 
 构建器与 `RUN` 均通过 `http://127.0.0.1:20171` 使用已连接节点。内网地址按预置 NO_PROXY 直连。**宿主网络允许构建步骤访问宿主网络服务，适合自己可信的 Dockerfile。** 不新增代理监听地址或开放 `20171` 防火墙端口。
 
 直接使用 `sudo docker buildx build --builder customizer-multiarch ...` 时，BuildKit 自身访问仓库有代理，但不会自动获得这里的 `RUN` 代理参数和宿主网络；需要下载依赖时优先使用预置构建命令。普通 `docker build`、`docker run`、Compose 和其他 builder 的行为不受此命令影响。
+
+如果旧脚本在 `load metadata` 阶段报告 `failed to fetch anonymous token`，并显示客户端直接连接 `auth.docker.io` 的公网 IPv4/IPv6，可能是 Buildx 客户端代理缺失。BuildKit 可通过客户端认证会话获取 token，不能只配置 daemon 和 BuildKit 容器。新版辅助命令也为客户端进程设置本机代理；更新 `/usr/local/bin/docker-multiarch` 后直接重试构建，无需删除或重建 builder，也不需要因此关闭系统 IPv6。直接运行原生 `docker buildx` 时需自行给客户端配置代理环境。
 
 Dockerfile 无需写 `ENV HTTP_PROXY=...` 或把代理存入最终镜像。Docker 的预定义代理参数默认不会进入镜像历史和缓存键；Dockerfile 显式声明、输出或保存代理变量时可能改变这一行为。自行覆盖代理、使用 `RUN --network=none` 或不遵循代理环境变量的程序，也会影响实际访问。
 

@@ -21,6 +21,9 @@ OPTIONS = {'network': 'host', 'restart-policy': 'unless-stopped',
            'env.CUSTOMIZER_MULTIARCH': '1', **{'env.' + key: value for key, value in PROXIES.items()}}
 FLAGS = ['--allow-insecure-entitlement=network.host']
 DOCKER = ['docker', '--config', '/root/.docker', '--context', 'default']
+# Buildx resolves the default context to its Unix socket when saving a node.
+# /var/run is normally a symlink to /run; neither spelling is a remote daemon.
+LOCAL_ENDPOINTS = {'default', 'unix:///var/run/docker.sock', 'unix:///run/docker.sock'}
 REGISTRATION = Path('/proc/sys/fs/binfmt_misc/customizer-aarch64')
 
 
@@ -31,6 +34,9 @@ def environment():
            if not key.startswith(('DOCKER_', 'BUILDX_', 'BUILDKIT_'))
            and key.lower() not in ('http_proxy', 'https_proxy', 'all_proxy', 'no_proxy')}
     env.update(HOME='/root', DOCKER_CONFIG='/root/.docker', BUILDX_CONFIG='/root/.docker/buildx')
+    # Registry token requests can be delegated to the Buildx client auth
+    # session. BuildKit container proxy settings do not cover that process.
+    env.update(PROXIES)
     return env
 
 
@@ -67,11 +73,25 @@ def builder():
 
 def validate_builder(item):
     nodes = item.get('Nodes') or []
-    if (item.get('Driver') != 'docker-container' or len(nodes) != 1
-            or nodes[0].get('Name') != NODE or nodes[0].get('Endpoint') != 'default'
-            or any(nodes[0].get('DriverOpts', {}).get(key) != value for key, value in OPTIONS.items())
-            or nodes[0].get('Flags') != FLAGS):
+    mismatches = []
+    if item.get('Driver') != 'docker-container':
+        mismatches.append('driver')
+    if len(nodes) != 1:
+        mismatches.append('node count')
+    else:
+        node = nodes[0]
+        if node.get('Name') != NODE:
+            mismatches.append('node name')
+        if node.get('Endpoint') not in LOCAL_ENDPOINTS:
+            mismatches.append('local Docker endpoint')
+        options = node.get('DriverOpts') or {}
+        mismatches += ['driver option ' + key for key, value in OPTIONS.items() if options.get(key) != value]
+        if node.get('Flags') != FLAGS:
+            mismatches.append('BuildKit flags')
+    if mismatches:
+        # Report field names only: custom proxy values may contain credentials.
         raise RuntimeError('An incompatible builder named ' + NAME + ' already exists. '
+                           'Mismatched fields: ' + ', '.join(mismatches) + '. '
                            'Inspect it with sudo docker buildx inspect ' + NAME +
                            '; it has not been replaced or removed.')
 
@@ -101,7 +121,7 @@ def setup():
     # Pull BuildKit only now, after a node is connected; dockerd's proxy handles this pull.
     docker('buildx', 'inspect', NAME, '--bootstrap')
     docker('buildx', 'use', NAME)
-    print('Ready: ' + NAME + ' (root/local Docker; BuildKit proxy ' + PROXY + ').')
+    print('Ready: ' + NAME + ' (root/local Docker; BuildKit and Buildx client proxy ' + PROXY + ').')
     print('Use sudo docker-multiarch-build --platform linux/amd64,linux/arm64 -t <image> --push .')
 
 

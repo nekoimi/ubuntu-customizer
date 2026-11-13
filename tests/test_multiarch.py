@@ -4,12 +4,15 @@ import csv
 from contextlib import redirect_stdout, redirect_stderr
 import importlib.util
 import io
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
@@ -22,11 +25,37 @@ BASH = shutil.which('bash') if os.name != 'nt' else shutil.which('bash', path=r'
 
 def configured_builder():
     return {'Name': multiarch.NAME, 'Driver': 'docker-container', 'Nodes': [
-        {'Name': multiarch.NODE, 'Endpoint': 'default', 'DriverOpts': dict(multiarch.OPTIONS),
+        {'Name': multiarch.NODE, 'Endpoint': 'unix:///var/run/docker.sock', 'DriverOpts': dict(multiarch.OPTIONS),
          'Flags': list(multiarch.FLAGS)}]}
 
 
 class Multiarch(unittest.TestCase):
+    def test_default_context_and_both_local_socket_spellings_are_accepted(self):
+        for endpoint in ('default', 'unix:///var/run/docker.sock', 'unix:///run/docker.sock'):
+            item = configured_builder()
+            item['Nodes'][0]['Endpoint'] = endpoint
+            with self.subTest(endpoint=endpoint):
+                multiarch.validate_builder(item)
+
+    def test_remote_endpoints_and_other_local_sockets_are_not_accepted(self):
+        for endpoint in ('ssh://remote', 'tcp://127.0.0.1:2375', 'remote-context',
+                         'unix:///run/user/1000/docker.sock', 'unix:///other/docker.sock', None):
+            item = configured_builder()
+            item['Nodes'][0]['Endpoint'] = endpoint
+            with self.subTest(endpoint=endpoint), self.assertRaisesRegex(RuntimeError, 'local Docker endpoint'):
+                multiarch.validate_builder(item)
+
+    def test_mismatch_diagnostic_names_fields_without_exposing_credentials(self):
+        item = configured_builder()
+        item['Nodes'][0]['DriverOpts']['env.HTTPS_PROXY'] = 'http://private-user:private-pass@proxy:80'
+        item['Nodes'][0]['Endpoint'] = 'ssh://private-host'
+        with self.assertRaises(RuntimeError) as error:
+            multiarch.validate_builder(item)
+        message = str(error.exception)
+        self.assertIn('driver option env.HTTPS_PROXY', message)
+        self.assertIn('local Docker endpoint', message)
+        self.assertNotIn('private', message)
+
     def test_setup_creates_once_with_csv_escaped_proxy_and_bootstraps_after_validation(self):
         with patch.object(multiarch, 'check_binfmt'), patch.object(multiarch, 'check_proxy'), \
                 patch.object(multiarch, 'builder', side_effect=[None, configured_builder()]), \
@@ -107,19 +136,57 @@ class Multiarch(unittest.TestCase):
                     else:
                         with self.assertRaises(RuntimeError): multiarch.check_binfmt()
 
-    def test_docker_commands_ignore_remote_context_and_shell_proxies_without_writing_client_config(self):
+    def test_docker_commands_replace_inherited_proxies_for_client_auth_without_writing_client_config(self):
         with patch.dict(os.environ, {'DOCKER_HOST': 'tcp://remote:2375', 'DOCKER_CONTEXT': 'remote',
                                      'DOCKER_CONFIG': '/user/config', 'BUILDX_BUILDER': 'other',
-                                     'BUILDKIT_HOST': 'tcp://other', 'HTTPS_PROXY': 'http://other', 'HOME': '/user'}, clear=True), \
+                                     'BUILDKIT_HOST': 'tcp://other', 'HTTPS_PROXY': 'http://other',
+                                     'NO_PROXY': '*', 'ALL_PROXY': 'socks5://other', 'HOME': '/user'}, clear=True), \
                 patch.object(multiarch.subprocess, 'run') as run:
             multiarch.docker('buildx', 'ls', capture=True)
         self.assertEqual(run.call_args.args[0][:5], ['docker', '--config', '/root/.docker', '--context', 'default'])
         env = run.call_args.kwargs['env']
         self.assertEqual(env['HOME'], '/root')
         self.assertEqual(env['BUILDX_CONFIG'], '/root/.docker/buildx')
-        for key in ('DOCKER_CONTEXT', 'DOCKER_HOST', 'BUILDX_BUILDER', 'BUILDKIT_HOST', 'HTTPS_PROXY'):
+        for key in ('DOCKER_CONTEXT', 'DOCKER_HOST', 'BUILDX_BUILDER', 'BUILDKIT_HOST', 'ALL_PROXY'):
             self.assertNotIn(key, env)
+        for key, value in multiarch.PROXIES.items():
+            self.assertEqual(env[key], value)
         self.assertNotIn('stdin', run.call_args.kwargs)
+
+    def test_client_subprocess_token_request_uses_proxy_even_with_inherited_bypass_all(self):
+        requests = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                requests.append(self.path)
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"token":"test-token"}')
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        proxy = 'http://127.0.0.1:' + str(server.server_port)
+        proxies = {key: (multiarch.BYPASS if key.lower() == 'no_proxy' else proxy)
+                   for key in multiarch.PROXIES}
+        url = 'http://auth.docker.invalid/token?scope=repository%3Alibrary%2Falpine%3Apull'
+        code = 'import urllib.request; print(urllib.request.urlopen(' + repr(url) + ', timeout=3).read().decode())'
+        try:
+            # A real child process makes an auth-like HTTP request to an invalid
+            # external name through our local fake proxy. No Docker or Internet.
+            with patch.object(multiarch, 'DOCKER', [sys.executable, '-c', code]), \
+                    patch.object(multiarch, 'PROXIES', proxies), \
+                    patch.dict(os.environ, {'NO_PROXY': '*', 'HTTPS_PROXY': 'http://other'}, clear=False):
+                result = multiarch.docker(capture=True)
+            self.assertEqual(json.loads(result.stdout), {'token': 'test-token'})
+            self.assertEqual(requests, [url])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
 
     def test_ls_json_selects_only_our_builder(self):
         output = '\n'.join(json.dumps(item) for item in ({'Name': 'default'}, configured_builder()))
