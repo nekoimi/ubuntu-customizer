@@ -146,7 +146,10 @@ mkdir -p "$target/run/sshd"
 chroot "$target" /usr/sbin/sshd -t
 finalize_stage='Generating initramfs and installing BIOS / UEFI bootloaders'
 report_stage
-chroot "$target" /bin/bash -se -- "$disk" < /usr/local/lib/ubuntu-customizer/bootloader.sh
+# mdev may not create /dev/disk at all. This directory is on the Live system;
+# the adapter overlays it temporarily and never writes permanent device links.
+mkdir -p "$target/dev/disk"
+chroot "$target" /bin/bash -se -- "$disk" "$root_uuid" < /usr/local/lib/ubuntu-customizer/bootloader.sh
 finalize_stage='Checking root and EFI filesystem detection using installed system tools'
 report_stage
 # Alpine and the installed system can ship different libblkid versions and

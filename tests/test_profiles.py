@@ -208,6 +208,10 @@ class Profiles(unittest.TestCase):
                 self.assertEqual(customize.args[2]['TARGET_DISTRO'], distro)
                 password = next(call for call in build.run.call_args_list if call.args[0][-2:] == ['chpasswd', '--encrypted'])
                 self.assertEqual(password.kwargs['input'], (distro + ':test-hash\n').encode())
+                boot = next(call for call in build.guest.call_args_list
+                            if call.kwargs.get('label') == 'Generating initramfs and installing BIOS / UEFI bootloaders')
+                self.assertTrue(boot.args[1].startswith('set -- /dev/loop99 uuid\n'))
+                self.assertEqual(build.checks['grub_root_uuid'], 'passed')
                 self.assertEqual(build.checks['target_packages_and_config'], 'passed')
 
 

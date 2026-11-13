@@ -269,8 +269,9 @@ ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
         root_uuid = self.output(["blkid", "-p", "-s", "UUID", "-o", "value", self.loop + "p3"])
         esp_uuid = self.output(["blkid", "-p", "-s", "UUID", "-o", "value", self.loop + "p2"])
         (root / "etc/fstab").write_text(f"UUID={root_uuid} / ext4 defaults 0 1\nUUID={esp_uuid} /boot/efi vfat umask=0077 0 2\n/swapfile none swap sw 0 0\n")
-        self.guest(root, 'set -- ' + shlex.quote(self.loop) + '\n' + self.target.guest_script('bootloader'),
+        self.guest(root, 'set -- ' + shlex.quote(self.loop) + ' ' + shlex.quote(root_uuid) + '\n' + self.target.guest_script('bootloader'),
                    label="Generating initramfs and installing BIOS / UEFI bootloaders")
+        self.checks['grub_root_uuid'] = 'passed'
         self.guest(root, self.target.guest_script("check"), guest_env, label="Checking target packages and configuration")
         self.checks["target_packages_and_config"] = "passed"
         self.details["v2raya"]["core_version"] = self.output(["chroot", root, "v2raya_core", "version"])
