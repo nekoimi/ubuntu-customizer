@@ -29,7 +29,7 @@ class ShellProxy(unittest.TestCase):
         result = self.run_shell(r'''
 [[ ! -v http_proxy && ! -v HTTPS_PROXY && ! -v ALL_PROXY ]]
 proxy-on
-bash --noprofile --norc -c '[[ $http_proxy == http://127.0.0.1:20171 && $HTTPS_PROXY == "$http_proxy" && $ALL_PROXY == "$http_proxy" && $NO_PROXY == "$no_proxy" ]]'
+bash --noprofile --norc -c '[[ $http_proxy == http://127.0.0.1:20173 && $HTTPS_PROXY == "$http_proxy" && $ALL_PROXY == "$http_proxy" && $NO_PROXY == "$no_proxy" ]]'
 proxy-off
 bash --noprofile --norc -c 'for v in http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY no_proxy NO_PROXY; do [[ ! -v $v ]] || exit 1; done'
 ''')
@@ -58,7 +58,7 @@ class ProxyDiagnostics(unittest.TestCase):
             self.assertTrue(check.request("registry", "https://registry-1.docker.io/v2/", {"200", "401"}))
         args = run.call_args.args[0]
         self.assertEqual(args[:2], ["curl", "--disable"])
-        self.assertEqual(args[args.index("--proxy") + 1], "http://127.0.0.1:20171")
+        self.assertEqual(args[args.index("--proxy") + 1], "http://127.0.0.1:20173")
         self.assertEqual(args[args.index("--noproxy") + 1], "")
         self.assertNotIn("--insecure", args)
         self.assertFalse(any(key.lower().endswith("_proxy") for key in run.call_args.kwargs["env"]))
@@ -75,10 +75,11 @@ class ProxyDiagnostics(unittest.TestCase):
 
     def test_missing_proxy_port_skips_external_requests_and_returns_failure(self):
         with patch("sys.argv", ["proxy-check"]), patch.object(check, "service", return_value=True), \
-                patch.object(check, "port", side_effect=[True, False]), \
+                patch.object(check, "port", side_effect=[True, False]) as port, \
                 patch.object(check, "request") as request, contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(check.main(), 1)
         request.assert_not_called()
+        self.assertEqual([call.args[0] for call in port.call_args_list], [2017, 20173])
         self.assertIn("[SKIP]", output.getvalue())
 
     def test_healthy_endpoints_return_success(self):

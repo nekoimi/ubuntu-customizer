@@ -13,7 +13,7 @@ import sys
 
 NAME = 'customizer-multiarch'
 NODE = NAME + '0'
-PROXY = 'http://127.0.0.1:20171'
+PROXY = 'http://127.0.0.1:20173'
 BYPASS = 'localhost,127.0.0.0/8,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.localhost,.local'
 PROXIES = {'http_proxy': PROXY, 'https_proxy': PROXY, 'no_proxy': BYPASS,
            'HTTP_PROXY': PROXY, 'HTTPS_PROXY': PROXY, 'NO_PROXY': BYPASS}
@@ -54,7 +54,7 @@ def check_binfmt():
 
 def check_proxy():
     try:
-        with socket.create_connection(('127.0.0.1', 20171), timeout=3):
+        with socket.create_connection(('127.0.0.1', 20173), timeout=3):
             pass
     except OSError as error:
         raise RuntimeError('Local proxy is not ready. Open http://<server-ip>:2017, '

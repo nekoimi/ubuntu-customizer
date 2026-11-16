@@ -14,7 +14,7 @@ proxy-check
 sudo docker-multiarch-setup
 ```
 
-初始化命令创建 `customizer-multiarch`，使用本机 rootful Docker、root 的 `/root/.docker` 配置和 `docker-container` 驱动。首次通过 Docker 已有的代理下载默认 BuildKit 镜像，然后启动并显示平台列表。仅检测 `20171` 端口不足以证明节点可用，`proxy-check` 和实际构建用于验证外网访问。
+初始化命令创建 `customizer-multiarch`，使用本机 rootful Docker、root 的 `/root/.docker` 配置和 `docker-container` 驱动。首次通过 Docker 已有的代理下载默认 BuildKit 镜像，然后启动并显示平台列表。仅检测 `20173` 端口不足以证明节点可用，`proxy-check` 和实际构建用于验证外网访问。
 
 命令可以重复执行：已有配置匹配时复用构建器与缓存；同名构建器的驱动、端点、代理等不匹配时拒绝继续，不自动删除、替换或清理缓存。不会修改其他构建器、Docker daemon 配置、普通容器的环境变量或用户的 Docker 客户端代理配置。初始化会将该构建器选为 root 用户在本地上下文的当前构建器。
 
@@ -45,7 +45,9 @@ sudo docker-multiarch-build \
 | BuildKit 解析、拉取基础镜像，以及推送/导入导出远端缓存 | 构建器容器的 HTTP_PROXY / HTTPS_PROXY / NO_PROXY 环境变量 |
 | Dockerfile `RUN` 中的 curl、APT 等下载 | 构建命令注入标准代理 build args，配合宿主网络访问本机代理 |
 
-构建器与 `RUN` 均通过 `http://127.0.0.1:20171` 使用已连接节点。内网地址按预置 NO_PROXY 直连。**宿主网络允许构建步骤访问宿主网络服务，适合自己可信的 Dockerfile。** 不新增代理监听地址或开放 `20171` 防火墙端口。
+Buildx 客户端、构建器与 `RUN` 均通过带分流规则的 HTTP 代理 `http://127.0.0.1:20173` 访问，由 v2rayA 规则选择直连或使用已连接节点。内网地址按预置 NO_PROXY 直连。**宿主网络允许构建步骤访问宿主网络服务，适合自己可信的 Dockerfile。** 不新增代理监听地址或开放 `20173` 防火墙端口。
+
+旧版创建的构建器可能仍使用普通 HTTP `20171`。新脚本不会静默改写已有容器；初始化若提示代理字段不匹配，应先确认 v2rayA 的规则 HTTP 已设置为 `20173`，再单独迁移构建器配置。仅替换客户端脚本不会改变 BuildKit 容器原有环境，不能认为代理已全部切换。
 
 直接使用 `sudo docker buildx build --builder customizer-multiarch ...` 时，BuildKit 自身访问仓库有代理，但不会自动获得这里的 `RUN` 代理参数和宿主网络；需要下载依赖时优先使用预置构建命令。普通 `docker build`、`docker run`、Compose 和其他 builder 的行为不受此命令影响。
 

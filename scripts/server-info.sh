@@ -53,9 +53,10 @@ inspect tailscale status
 section 'v2rayA'
 inspect v2raya --version
 echo 'Web UI: http://<server-ip>:2017 (create an account, import and connect a node)'
-echo 'Docker HTTP/HTTPS proxy: http://127.0.0.1:20171; no node means external pulls fail.'
+echo 'Local proxies: SOCKS5 20170, SOCKS5 with routing rules 20172; HTTP 20171, HTTP with routing rules 20173.'
+echo 'Docker HTTP/HTTPS proxy: http://127.0.0.1:20173; proxy-routed requests require a connected node.'
 echo 'Bash helpers: proxy-on / proxy-off / proxy-status. Run proxy-check for connectivity checks.'
-inspect ss -lnt '( sport = :2017 or sport = :20170 or sport = :20171 or sport = :20172 )'
+inspect ss -lnt '( sport = :2017 or sport = :20170 or sport = :20171 or sport = :20172 or sport = :20173 )'
 section 'Maintenance timers'
 inspect systemctl list-timers --all --no-pager fstrim.timer apt-daily.timer ubuntu-ip-notify.timer
 section 'LAN IP notifications'

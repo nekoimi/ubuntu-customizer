@@ -76,6 +76,14 @@ class ReleaseDownload(unittest.TestCase):
 
 
 class GuestProxyPreset(unittest.TestCase):
+    def test_docker_daemon_preset_uses_routed_http_listener(self):
+        script = (ROOT / 'components/server/customize.sh').read_text()
+        daemon = json.loads(script.split("cat > /etc/docker/daemon.json <<'EOF'\n", 1)[1].split('\nEOF', 1)[0])
+        self.assertEqual(daemon['proxies'], guest.DOCKER_PROXY)
+        for key in ('http-proxy', 'https-proxy'):
+            self.assertEqual(daemon['proxies'][key], 'http://127.0.0.1:20173')
+        self.assertEqual(guest.PORTS['httpWithPac'], 20173)
+
     def api(self, *, accounts=False, running=False, wrong_port=False):
         api = Mock()
         state = {"setting": {"logLevel": "info", "futureField": "keep"}, "ports": {}}
@@ -91,7 +99,7 @@ class GuestProxyPreset(unittest.TestCase):
                     state[path] = dict(data)
                 result = dict(state[path])
                 if wrong_port and path == "ports":
-                    result["http"] = 12345
+                    result[wrong_port if isinstance(wrong_port, str) else "http"] = 12345
                 return {"setting": result} if path == "setting" else result
             if path == "touch":
                 return {"running": running}
@@ -103,7 +111,8 @@ class GuestProxyPreset(unittest.TestCase):
     def test_api_presets_preserve_other_fields_and_never_import_or_connect_nodes(self):
         api, state = self.api()
         guest.configure(api)
-        self.assertEqual(state["ports"]["http"], 20171)
+        self.assertEqual(state["ports"], {"socks5": 20170, "http": 20171, "socks5WithPac": 20172,
+                                         "httpWithPac": 20173, "vmess": 0})
         self.assertEqual(state["setting"]["futureField"], "keep")
         self.assertEqual(state["setting"]["transparent"], "close")
         self.assertEqual(state["setting"]["dnsMode"], "off")
@@ -125,7 +134,8 @@ class GuestProxyPreset(unittest.TestCase):
         self.assertNotEqual(passwords[0], passwords[1])
 
     def test_existing_account_wrong_port_or_running_core_refuses_build(self):
-        for options in ({"accounts": True}, {"wrong_port": True}, {"running": True}):
+        for options in ({"accounts": True}, {"wrong_port": "socks5"}, {"wrong_port": "http"},
+                        {"wrong_port": "socks5WithPac"}, {"wrong_port": "httpWithPac"}, {"running": True}):
             with self.subTest(options=options), self.assertRaises(RuntimeError):
                 guest.configure(self.api(**options)[0])
 
@@ -183,6 +193,11 @@ class GuestProxyPreset(unittest.TestCase):
                 guest.check_database(path)
             with closing(sqlite3.connect(path)) as db, db:
                 db.execute("DELETE FROM system_config WHERE key='accounts:build-check'")
+                old_ports = {**guest.PORTS, "socks5WithPac": 0, "httpWithPac": 20172}
+                db.execute("UPDATE system_config SET value=? WHERE key='system:ports'", (json.dumps(old_ports),))
+            with self.assertRaisesRegex(RuntimeError, "persistent preset missing: ports"):
+                guest.check_database(path)
+            with closing(sqlite3.connect(path)) as db, db:
                 db.execute("UPDATE system_config SET value='{}' WHERE key='system:ports'")
             with self.assertRaisesRegex(RuntimeError, "persistent preset"):
                 guest.check_database(path)

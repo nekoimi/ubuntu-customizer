@@ -5,7 +5,7 @@ import os
 import socket
 import subprocess
 
-PROXY = "http://127.0.0.1:20171"
+PROXY = "http://127.0.0.1:20173"
 
 
 def service(name):
@@ -61,7 +61,7 @@ def main():
     )).parse_args()
     print("Checking local v2rayA and Docker (this does not inspect Web credentials or nodes)")
     results = [service("v2raya"), service("docker"), port(2017)]
-    proxy_ready = port(20171)
+    proxy_ready = port(20173)
     results.append(proxy_ready)
     if proxy_ready:
         results.append(request("GitHub HTTPS via proxy", "https://github.com/", {"200"}))

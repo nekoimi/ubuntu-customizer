@@ -84,8 +84,8 @@ cat > /etc/docker/daemon.json <<'EOF'
   "log-driver": "json-file",
   "log-opts": {"max-size": "10m", "max-file": "3"},
   "proxies": {
-    "http-proxy": "http://127.0.0.1:20171",
-    "https-proxy": "http://127.0.0.1:20171",
+    "http-proxy": "http://127.0.0.1:20173",
+    "https-proxy": "http://127.0.0.1:20173",
     "no-proxy": "localhost,127.0.0.0/8,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.localhost,.local"
   }
 }

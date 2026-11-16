@@ -128,7 +128,7 @@ runuser -u "${TARGET_USER}" -- bash --noprofile --norc -se <<'PROXY_CHECK'
 set -euo pipefail
 source /etc/profile.d/customizer-proxy.sh
 proxy-on
-[[ $http_proxy == http://127.0.0.1:20171 && $HTTPS_PROXY == "$http_proxy" && $ALL_PROXY == "$http_proxy" ]]
+[[ $http_proxy == http://127.0.0.1:20173 && $HTTPS_PROXY == "$http_proxy" && $ALL_PROXY == "$http_proxy" ]]
 [[ $no_proxy == "$NO_PROXY" && $no_proxy == *'.aliyun.com'* ]]
 proxy-status
 proxy-off

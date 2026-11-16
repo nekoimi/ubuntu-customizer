@@ -30,6 +30,22 @@ def configured_builder():
 
 
 class Multiarch(unittest.TestCase):
+    def test_default_proxy_and_readiness_check_use_http_with_routing_rules(self):
+        self.assertEqual(multiarch.PROXY, 'http://127.0.0.1:20173')
+        with patch.object(multiarch.socket, 'create_connection') as connect:
+            multiarch.check_proxy()
+        connect.assert_called_once_with(('127.0.0.1', 20173), timeout=3)
+
+    def test_legacy_plain_http_builder_refuses_without_modifying_existing_container(self):
+        item = configured_builder()
+        for key in ('env.http_proxy', 'env.https_proxy', 'env.HTTP_PROXY', 'env.HTTPS_PROXY'):
+            item['Nodes'][0]['DriverOpts'][key] = 'http://127.0.0.1:20171'
+        with patch.object(multiarch, 'check_binfmt'), patch.object(multiarch, 'check_proxy'), \
+                patch.object(multiarch, 'builder', return_value=item), patch.object(multiarch, 'docker') as docker:
+            with self.assertRaisesRegex(RuntimeError, 'driver option env.HTTPS_PROXY'):
+                multiarch.setup()
+        self.assertEqual([call.args[0] for call in docker.call_args_list], ['info'])
+
     def test_default_context_and_both_local_socket_spellings_are_accepted(self):
         for endpoint in ('default', 'unix:///var/run/docker.sock', 'unix:///run/docker.sock'):
             item = configured_builder()

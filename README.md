@@ -43,8 +43,8 @@ GitHub 下载失败时，可先运行 `bash build.sh check-downloads`，使用�
 uv 和 v2rayA 从 GitHub API / Releases 下载，Tailscale 使用官方 `pkgs.tailscale.com` 源；这些站点访问较慢时，可在 `config/local.env` 配置现有 v2rayA 的 **HTTP 代理**（地址和端口按实际部署填写）：
 
 ```bash
-HTTP_PROXY='http://192.168.1.10:20171'
-HTTPS_PROXY='http://192.168.1.10:20171'
+HTTP_PROXY='http://192.168.1.10:20173'
+HTTPS_PROXY='http://192.168.1.10:20173'
 NO_PROXY='localhost,127.0.0.1,::1,.aliyun.com,.tsinghua.edu.cn'
 ```
 
@@ -71,7 +71,7 @@ NO_PROXY='localhost,127.0.0.1,::1,.aliyun.com,.tsinghua.edu.cn'
 - 不预装 Node.js、Java、Go、Rust，以及数据库与 Web 服务。
 - 预装 Docker Engine、CLI、containerd、Buildx 与 Compose 插件，使用构建时国内 Docker APT 仓库可用的最新兼容稳定版本，并记录实际版本。
 - 预装 Tailscale，`tailscaled` 开机自启；镜像保持未认证状态，安装后由用户执行 `sudo tailscale up` 手动认证，后续重启沿用本机认证状态。
-- 预装构建时最新稳定版 v2rayA 官方 Debian 包（含代理核心和规则数据），开机自启；访问 `http://服务器IP:2017` 创建管理账号、导入并连接节点后，Docker 即可经预置的 `127.0.0.1:20171` HTTP 代理拉取镜像。无节点时外网拉取会失败；不预置节点、订阅或 Web 账号，不启用透明代理及 DNS 接管。详见 [v2rayA 与 Docker 代理](docs/构建与运行.md#v2raya-与-docker-代理)。
+- 预装构建时最新稳定版 v2rayA 官方 Debian 包（含代理核心和规则数据），开机自启；访问 `http://服务器IP:2017` 创建管理账号、导入并连接节点后，Docker 即可经预置的 `127.0.0.1:20173` 带分流规则 HTTP 代理拉取镜像。规则选择代理的请求需要可用节点；不预置节点、订阅或 Web 账号，不启用透明代理及 DNS 接管。详见 [v2rayA 与 Docker 代理](docs/构建与运行.md#v2raya-与-docker-代理)。
 - 提供 Bash 终端代理开关 `proxy-on` / `proxy-off`、环境状态 `proxy-status` 和连通检查 `proxy-check`；新终端默认不启用代理，Docker 保持独立配置。
 - 可在 `config/local.env` 填写 `NTFY_URL`、`NTFY_TOPIC`、`NTFY_TOKEN`，预置开机和内网 IPv4 变化通知，内容包含主机名、网卡地址和 SSH 命令；发送失败自动重试，不阻塞启动。三项留空则禁用。Token 会进入私人 ISO，配置与日志规则见 [ntfy 通知](docs/构建与运行.md#ntfy-内网-ip-通知)。
 - Ubuntu APT 与 Docker 的 APT 安装仓库均使用国内镜像源，并在安装后保留；不配置 Docker 镜像加速地址。

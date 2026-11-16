@@ -12,7 +12,7 @@ import time
 import urllib.error
 import urllib.request
 
-PORTS = {"socks5": 20170, "http": 20171, "socks5WithPac": 0, "httpWithPac": 20172, "vmess": 0}
+PORTS = {"socks5": 20170, "http": 20171, "socks5WithPac": 20172, "httpWithPac": 20173, "vmess": 0}
 SETTINGS = {
     "transparent": "close", "portSharing": False, "dnsMode": "off", "dnsHijack": "no",
     # Docker enables forwarding; connecting a proxy node must not turn it off.
@@ -24,7 +24,7 @@ SERVICE_ENV = {
     "V2RAYA_LITE": "true", "V2RAYA_LOG_FILE": "", "V2RAYA_LOG_DISABLE_COLOR": "true",
 }
 DOCKER_PROXY = {
-    "http-proxy": "http://127.0.0.1:20171", "https-proxy": "http://127.0.0.1:20171",
+    "http-proxy": "http://127.0.0.1:20173", "https-proxy": "http://127.0.0.1:20173",
     "no-proxy": "localhost,127.0.0.0/8,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.localhost,.local",
 }
 
